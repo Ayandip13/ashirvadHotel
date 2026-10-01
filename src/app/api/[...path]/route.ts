@@ -238,11 +238,11 @@ async function listBookings(req: NextRequest) {
       ...(guestId ? { guestId } : {}),
       ...(from || to
         ? {
-            createdAt: {
-              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
-              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
-            },
-          }
+          createdAt: {
+            ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+            ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+          },
+        }
         : {}),
     },
     orderBy: { createdAt: 'desc' },
@@ -566,7 +566,7 @@ async function createBill(body: Record<string, unknown>, user: RequestUser) {
     user = { id: user.id, name: approver.name, role: approver.role }
   }
 
-  let foodTotal = 0
+  let foodTotal = 0;
   let pendingOrders: { id: string }[] = []
   if (includeFood === true) {
     pendingOrders = await DB.foodOrder.findMany({
@@ -820,11 +820,11 @@ async function listOrders(req: NextRequest) {
       ...(status ? { status } : {}),
       ...(from || to
         ? {
-            createdAt: {
-              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
-              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
-            },
-          }
+          createdAt: {
+            ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+            ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+          },
+        }
         : {}),
     },
     orderBy: { createdAt: 'desc' },
@@ -963,11 +963,11 @@ async function listStaffPayments(req: NextRequest) {
       ...(type ? { type } : {}),
       ...(from || to
         ? {
-            date: {
-              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
-              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
-            },
-          }
+          date: {
+            ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+            ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+          },
+        }
         : {}),
     },
     orderBy: { date: 'desc' },
@@ -1264,19 +1264,19 @@ async function listAudit(req: NextRequest) {
       ...(action ? { action } : {}),
       ...(q
         ? {
-            OR: [
-              { details: { contains: q } },
-              { userName: { contains: q } },
-            ],
-          }
+          OR: [
+            { details: { contains: q } },
+            { userName: { contains: q } },
+          ],
+        }
         : {}),
       ...(from || to
         ? {
-            createdAt: {
-              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
-              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
-            },
-          }
+          createdAt: {
+            ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+            ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+          },
+        }
         : {}),
     },
     orderBy: { createdAt: 'desc' },
@@ -1353,10 +1353,10 @@ async function globalSearch(req: NextRequest) {
   // Booking id search (exact prefix)
   const bookings = q.length > 5
     ? await DB.booking.findMany({
-        where: { id: { startsWith: q } },
-        take: 3,
-        include: { room: true, guest: true },
-      })
+      where: { id: { startsWith: q } },
+      take: 3,
+      include: { room: true, guest: true },
+    })
     : []
 
   return NextResponse.json({ guests, bookings, bills, rooms })
