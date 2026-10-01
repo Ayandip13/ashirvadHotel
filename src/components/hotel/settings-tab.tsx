@@ -36,6 +36,7 @@ import {
   Moon,
   Sun,
   Plus,
+  UtensilsCrossed,
 } from 'lucide-react'
 
 interface AppUserRow {
@@ -187,6 +188,48 @@ export function SettingsTab({ refreshKey }: TabProps) {
               <div className="space-y-1.5">
                 <Label htmlFor="s-gstin">Hotel GSTIN</Label>
                 <Input id="s-gstin" value={settings.hotelGstin || ''} onChange={(e) => setSettings({ ...settings, hotelGstin: e.target.value })} placeholder="e.g. 19AAAAA0000A1Z5" />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 border-t pt-3">
+              <UtensilsCrossed className="h-4 w-4 text-emerald-600" />
+              <p className="text-sm font-semibold">Restaurant Information (Separate Billing)</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-2 space-y-1.5">
+                <Label htmlFor="s-rname">Restaurant Name</Label>
+                <Input
+                  id="s-rname"
+                  value={settings.restaurantName || ''}
+                  placeholder="e.g. Ashirbad Restaurant"
+                  onChange={(e) => setSettings({ ...settings, restaurantName: e.target.value })}
+                />
+              </div>
+              <div className="col-span-2 space-y-1.5">
+                <Label htmlFor="s-raddr">Restaurant Address</Label>
+                <Input
+                  id="s-raddr"
+                  value={settings.restaurantAddress || ''}
+                  placeholder="Same as hotel or separate address"
+                  onChange={(e) => setSettings({ ...settings, restaurantAddress: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="s-rphone">Restaurant Phone</Label>
+                <Input
+                  id="s-rphone"
+                  value={settings.restaurantPhone || ''}
+                  onChange={(e) => setSettings({ ...settings, restaurantPhone: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="s-rgstin">GSTIN / FSSAI No.</Label>
+                <Input
+                  id="s-rgstin"
+                  value={settings.restaurantGstin || ''}
+                  onChange={(e) => setSettings({ ...settings, restaurantGstin: e.target.value })}
+                  placeholder="e.g. FSSAI / GST No"
+                />
               </div>
             </div>
 

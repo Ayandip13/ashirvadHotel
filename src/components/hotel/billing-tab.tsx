@@ -124,7 +124,7 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
   const [gstPercent, setGstPercent] = useState('12')
   const [extraCharges, setExtraCharges] = useState('0')
   const [discount, setDiscount] = useState('0')
-  const [includeFood, setIncludeFood] = useState(true)
+  const [includeFood, setIncludeFood] = useState(false)
   const [payCash, setPayCash] = useState('0')
   const [payUpi, setPayUpi] = useState('0')
   const [payCard, setPayCard] = useState('0')
@@ -209,7 +209,7 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
     setGstPercent(settings.gstPercent || '12')
     setExtraCharges('0')
     setDiscount('0')
-    setIncludeFood(true)
+    setIncludeFood(false)
     setPayCash('0')
     setPayUpi('0')
     setPayCard('0')
@@ -318,6 +318,8 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
       if (from && new Date(b.createdAt).toISOString().slice(0, 10) < from) return false
       if (to && new Date(b.createdAt).toISOString().slice(0, 10) > to) return false
       if (kind === 'CUSTOM' && !b.isCorporate) return false
+      if (kind === 'GST' && (!b.actualGst || b.actualGst <= 0)) return false
+      if (kind === 'NON_GST' && b.actualGst > 0) return false
       if (kind === 'PAID' && balanceOf(b) > 0.01) return false
       if (kind === 'UNPAID' && balanceOf(b) <= 0.01) return false
       return true
@@ -459,6 +461,8 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
               key: 'kind',
               label: 'Type',
               options: [
+                { value: 'GST', label: 'GST Tax Invoices' },
+                { value: 'NON_GST', label: 'Non-GST Bills' },
                 { value: 'CUSTOM', label: 'Custom / Corp' },
                 { value: 'PAID', label: 'Fully paid' },
                 { value: 'UNPAID', label: 'With balance' },
@@ -636,7 +640,38 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>GST %</Label>
+                  <div className="flex items-center justify-between">
+                    <Label>GST %</Label>
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setGstPercent('0')}
+                        className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border transition-colors ${
+                          num(gstPercent) === 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        Non-GST (0%)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGstPercent('12')}
+                        className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border transition-colors ${
+                          num(gstPercent) === 12 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        12%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGstPercent('18')}
+                        className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border transition-colors ${
+                          num(gstPercent) === 18 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted text-muted-foreground'
+                        }`}
+                      >
+                        18%
+                      </button>
+                    </div>
+                  </div>
                   <Input type="number" value={gstPercent} onChange={(e) => setGstPercent(e.target.value)} />
                 </div>
                 <div className="space-y-1.5">
@@ -804,7 +839,13 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                   {settings.hotelAddress && <p className="text-xs text-muted-foreground">{settings.hotelAddress}</p>}
                   {settings.hotelPhone && <p className="text-xs text-muted-foreground">Ph: {settings.hotelPhone}</p>}
                   {settings.hotelGstin && <p className="text-xs text-muted-foreground">Hotel GSTIN: {settings.hotelGstin}</p>}
-                  <p className="mt-1 text-sm font-semibold">ROOM &amp; FOOD INVOICE</p>
+                  <p className="mt-1 text-sm font-semibold uppercase tracking-wide">
+                    {lastBill.actualGst > 0 ? (
+                      <span className="text-emerald-700 dark:text-emerald-400">GST TAX INVOICE</span>
+                    ) : (
+                      <span>NON-GST INVOICE / CASH MEMO</span>
+                    )}
+                  </p>
                 </div>
                 <div className="mb-3 space-y-0.5 border-y py-2 text-xs text-muted-foreground">
                   <p>Invoice: {lastBill.billNumber} · {formatDateTime(lastBill.createdAt)}</p>
@@ -832,7 +873,9 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                   </div>
                   {lastBill.foodTotal > 0 && (
                     <div className="flex justify-between">
-                      <span className="text-muted-foreground">Food / Restaurant</span>
+                      <span className="text-muted-foreground">
+                        Food / Restaurant ({settings.restaurantName || 'Restaurant'})
+                      </span>
                       <span className="font-medium">{formatINR(lastBill.foodTotal)}</span>
                     </div>
                   )}

@@ -49,6 +49,10 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   hotelAddress: 'Station Road, Kolkata',
   hotelPhone: '+91 90000 00000',
   hotelGstin: '',
+  restaurantName: 'Grand Restaurant',
+  restaurantAddress: 'Station Road, Kolkata',
+  restaurantPhone: '+91 90000 00000',
+  restaurantGstin: '',
   gstPercent: '12',
   invoicePrefix: 'INV',
   invoiceCounter: '1',
@@ -564,7 +568,7 @@ async function createBill(body: Record<string, unknown>, user: RequestUser) {
 
   let foodTotal = 0
   let pendingOrders: { id: string }[] = []
-  if (includeFood !== false) {
+  if (includeFood === true) {
     pendingOrders = await DB.foodOrder.findMany({
       where: { bookingId: booking.id, status: 'PENDING' },
       select: { id: true },

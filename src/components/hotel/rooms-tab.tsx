@@ -23,7 +23,7 @@ import { RoomStatusBadge } from './status-badge'
 import { TableControls } from './table-controls'
 import { api, apiAs, formatINR, formatDate } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, Plus, BrushCleaning, Wrench, BedDouble } from 'lucide-react'
+import { Loader2, Plus, BrushCleaning, Wrench, BedDouble, Printer, Wallet } from 'lucide-react'
 
 interface Guest {
   id: string
@@ -59,9 +59,10 @@ interface TabProps {
   refreshKey: number
   onDataChanged: () => void
   initialFilter?: string
+  onNavigate?: (target: { tab: string; q?: string }) => void
 }
 
-export function RoomsTab({ refreshKey, onDataChanged, initialFilter }: TabProps) {
+export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate }: TabProps) {
   const [rooms, setRooms] = useState<Room[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -271,26 +272,49 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter }: TabProps)
           </DialogHeader>
           <div className="space-y-3">
             {viewRoom?.status === 'OCCUPIED' && viewRoom.bookings?.[0] && (
-              <div className="space-y-1.5 rounded-lg bg-muted p-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Guest</span>
-                  <span className="font-semibold">{viewRoom.bookings[0].guest?.name || 'Guest'}</span>
+              <div className="space-y-2">
+                <div className="space-y-1.5 rounded-lg bg-muted p-3 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Guest</span>
+                    <span className="font-semibold">{viewRoom.bookings[0].guest?.name || 'Guest'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Phone</span>
+                    <span className="font-semibold">{viewRoom.bookings[0].guest?.phone}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Check-In</span>
+                    <span className="font-semibold">{formatDate(viewRoom.bookings[0].checkIn)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Expected Out</span>
+                    <span className="font-semibold">{formatDate(viewRoom.bookings[0].checkOut)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Advance</span>
+                    <span className="font-semibold">{formatINR(viewRoom.bookings[0].advance)}</span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Phone</span>
-                  <span className="font-semibold">{viewRoom.bookings[0].guest?.phone}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Check-In</span>
-                  <span className="font-semibold">{formatDate(viewRoom.bookings[0].checkIn)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Expected Out</span>
-                  <span className="font-semibold">{formatDate(viewRoom.bookings[0].checkOut)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Advance</span>
-                  <span className="font-semibold">{formatINR(viewRoom.bookings[0].advance)}</span>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                    onClick={() => {
+                      onNavigate?.({ tab: 'billing', q: viewRoom.number })
+                      setViewRoom(null)
+                    }}
+                  >
+                    <Printer className="mr-1.5 h-4 w-4" /> Print Bill
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      onNavigate?.({ tab: 'billing', q: viewRoom.number })
+                      setViewRoom(null)
+                    }}
+                  >
+                    <Wallet className="mr-1.5 h-4 w-4" /> Billing / Checkout
+                  </Button>
                 </div>
               </div>
             )}

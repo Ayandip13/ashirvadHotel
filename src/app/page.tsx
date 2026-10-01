@@ -120,7 +120,7 @@ function Shell() {
       case 'dashboard':
         return <Dashboard {...props} onNavigate={onNavigate} />
       case 'rooms':
-        return <RoomsTab {...props} />
+        return <RoomsTab {...props} onNavigate={onNavigate} />
       case 'bookings':
         return <BookingsTab {...props} />
       case 'guests':

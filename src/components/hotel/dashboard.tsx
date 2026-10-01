@@ -35,6 +35,7 @@ import {
   BrushCleaning,
   CalendarCheck,
   CalendarX2,
+  Printer,
 } from 'lucide-react'
 
 interface Guest {
@@ -496,16 +497,26 @@ export function Dashboard({ refreshKey, onDataChanged, onNavigate }: DashboardPr
                   </div>
                 )}
               </div>
-              <Button
-                className="w-full"
-                variant="outline"
-                onClick={() => {
-                  onNavigate({ tab: 'billing' })
-                  setViewRoom(null)
-                }}
-              >
-                <Wallet className="mr-2 h-4 w-4" /> Open folio / checkout in Billing
-              </Button>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  onClick={() => {
+                    onNavigate({ tab: 'billing', q: viewRoom.number })
+                    setViewRoom(null)
+                  }}
+                >
+                  <Printer className="mr-1.5 h-4 w-4" /> Print Bill
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    onNavigate({ tab: 'billing', q: viewRoom.number })
+                    setViewRoom(null)
+                  }}
+                >
+                  <Wallet className="mr-1.5 h-4 w-4" /> Billing &amp; Checkout
+                </Button>
+              </div>
             </div>
           )}
           {viewRoom?.status === 'MAINTENANCE' && (
