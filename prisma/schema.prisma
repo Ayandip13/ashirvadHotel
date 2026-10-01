@@ -1,0 +1,188 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Room {
+  id           String      @id @default(cuid())
+  number       String      @unique
+  type         String      @default("Non-AC") // AC | Non-AC | Deluxe | Suite
+  capacity     Int         @default(2)
+  rate         Float       @default(1000) // actual per-night rate
+  status       String      @default("VACANT") // VACANT | OCCUPIED | MAINTENANCE
+  housekeeping String      @default("CLEAN") // CLEAN | DIRTY
+  notes        String?
+  bookings     Booking[]
+  foodOrders   FoodOrder[]
+  createdAt    DateTime    @default(now())
+}
+
+model Guest {
+  id        String    @id @default(cuid())
+  phone     String    @unique
+  name      String
+  company   String?
+  gst       String?
+  address   String?
+  idProof   String?
+  createdAt DateTime  @default(now())
+  bookings  Booking[]
+}
+
+model Booking {
+  id             String    @id @default(cuid())
+  roomId         String
+  guestId        String
+  checkIn        DateTime  @default(now())
+  checkOut       DateTime? // expected checkout
+  actualCheckOut DateTime?
+  days           Int       @default(1)
+  guestCount     Int       @default(1)
+  ratePerDay     Float // actual rate for this booking
+  status         String    @default("ACTIVE") // ACTIVE | COMPLETED | CANCELLED
+  paymentStatus  String    @default("UNPAID") // UNPAID | PARTIAL | PAID
+  advance        Float     @default(0)
+  isCorporate    Boolean   @default(false)
+  notes          String?
+  room           Room      @relation(fields: [roomId], references: [id])
+  guest          Guest     @relation(fields: [guestId], references: [id])
+  bills          Bill[]
+  foodOrders     FoodOrder[]
+  createdAt      DateTime  @default(now())
+}
+
+model Bill {
+  id              String   @id @default(cuid())
+  billNumber      String   @unique
+  bookingId       String
+  days            Int      @default(1)
+  actualRoomTotal Float // internal: actual rate x days
+  billedRoomTotal Float // printed on bill (can be custom corporate rate)
+  gstPercent      Float    @default(0)
+  actualGst       Float // GST credited internally (on billed amount per requirement)
+  foodTotal       Float    @default(0)
+  extraCharges    Float    @default(0)
+  discount        Float    @default(0)
+  grandTotal      Float // final payable on bill
+  payCash         Float    @default(0)
+  payUpi          Float    @default(0)
+  payCard         Float    @default(0)
+  advanceApplied  Float    @default(0) // advance deducted from final payable
+  isCorporate     Boolean  @default(false)
+  corporateName   String?
+  gstNumber       String?
+  createdBy       String?  // user name who created the bill
+  approvedBy      String?  // manager who approved custom billing
+  notes           String?
+  booking         Booking  @relation(fields: [bookingId], references: [id])
+  createdAt       DateTime @default(now())
+}
+
+model MenuItem {
+  id        String      @id @default(cuid())
+  name      String
+  category  String      @default("Main Course")
+  price     Float
+  available Boolean     @default(true)
+  orderItems OrderItem[]
+}
+
+model FoodOrder {
+  id        String      @id @default(cuid())
+  bookingId String? // attached to in-house guest => can merge to room bill
+  roomId    String?
+  tableNo   String? // walk-in restaurant table
+  total     Float       @default(0)
+  status    String      @default("PENDING") // PENDING | ADDED_TO_BILL | PAID
+  createdBy String? // user who took the order
+  notes     String?
+  items     OrderItem[]
+  booking   Booking?    @relation(fields: [bookingId], references: [id])
+  room      Room?       @relation(fields: [roomId], references: [id])
+  createdAt DateTime    @default(now())
+}
+
+model OrderItem {
+  id         String    @id @default(cuid())
+  orderId    String
+  menuItemId String?
+  name       String
+  price      Float
+  quantity   Int       @default(1)
+  order      FoodOrder @relation(fields: [orderId], references: [id])
+  menuItem   MenuItem? @relation(fields: [menuItemId], references: [id])
+}
+
+model Staff {
+  id       String         @id @default(cuid())
+  name     String
+  phone    String?
+  role     String         @default("Staff") // Manager | Reception | Housekeeping | Chef | Guard | Other
+  salary   Float          @default(0)
+  joinDate DateTime       @default(now())
+  address  String?
+  aadhaar  String?
+  active   Boolean        @default(true)
+  payments StaffPayment[]
+}
+
+model StaffPayment {
+  id            String   @id @default(cuid())
+  staffId       String
+  type          String // SALARY | ADVANCE | BONUS | DEDUCTION
+  amount        Float
+  method        String   @default("CASH") // CASH | UPI | CARD | BANK
+  date          DateTime @default(now())
+  recoveryNotes String? // advance recovery / adjustment notes
+  notes         String?
+  staff         Staff    @relation(fields: [staffId], references: [id])
+}
+
+model LedgerEntry {
+  id          String   @id @default(cuid())
+  date        DateTime @default(now())
+  type        String // INCOME | EXPENSE
+  category    String // ROOM_RENT | GST | FOOD | ADVANCE | SALARY | STAFF | PURCHASE | UTILITIES | MAINTENANCE | OTHER
+  description String
+  amount      Float
+  method      String   @default("CASH") // CASH | UPI | CARD | SPLIT | BANK
+  source      String   @default("MANUAL") // AUTO | MANUAL
+  vendor      String?  // staff/vendor for expense filtering
+  refId       String?
+  createdAt   DateTime @default(now())
+}
+
+model User {
+  id       String  @id @default(cuid())
+  name     String  @unique
+  role     String  @default("RECEPTION") // ADMIN | MANAGER | RECEPTION
+  pin      String  @default("0000")
+  active   Boolean @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Setting {
+  key   String @id
+  value String
+}
+
+model ExpenseCategory {
+  id     String  @id @default(cuid())
+  name   String  @unique
+  active Boolean @default(true)
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String // CUSTOM_BILL | BOOKING_CREATE | BOOKING_CANCEL | CHECKOUT | PAYMENT | ORDER | LOGIN | SETTINGS
+  entity    String // Booking | Bill | Room | Order | Setting
+  entityId  String?
+  details   String? // human-readable summary e.g. billed 1500 vs actual 1000
+  userName  String?
+  userRole  String?
+  createdAt DateTime @default(now())
+}

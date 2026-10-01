@@ -1,0 +1,1661 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { acquireDb, type DbSession } from '@/lib/cloud-db'
+import type { PrismaClient } from '@prisma/client'
+
+// Per-request Prisma client bound to the latest shared DB version
+let DB: PrismaClient
+let persistFn: () => Promise<void>
+
+// ============ HELPERS ============
+interface RequestUser {
+  id?: string
+  name?: string
+  role?: string
+}
+
+function getRequestUser(req: NextRequest): RequestUser {
+  return {
+    id: req.headers.get('x-user-id') || undefined,
+    name: req.headers.get('x-user-name') || undefined,
+    role: req.headers.get('x-user-role') || undefined,
+  }
+}
+
+async function logAudit(
+  action: string,
+  entity: string,
+  entityId: string | null | undefined,
+  details: string,
+  user: RequestUser
+) {
+  try {
+    await DB.auditLog.create({
+      data: {
+        action,
+        entity,
+        entityId: entityId || null,
+        details,
+        userName: user.name || null,
+        userRole: user.role || null,
+      },
+    })
+  } catch (e) {
+    console.error('audit log failed', e)
+  }
+}
+
+const DEFAULT_SETTINGS: Record<string, string> = {
+  hotelName: 'Grand Hotel',
+  hotelAddress: 'Station Road, Kolkata',
+  hotelPhone: '+91 90000 00000',
+  hotelGstin: '',
+  gstPercent: '12',
+  invoicePrefix: 'INV',
+  invoiceCounter: '1',
+}
+
+async function getSettingsMap(): Promise<Record<string, string>> {
+  const rows = await DB.setting.findMany()
+  const map = { ...DEFAULT_SETTINGS }
+  for (const r of rows) map[r.key] = r.value
+  return map
+}
+
+function num(v: unknown): number {
+  const f = parseFloat(String(v))
+  return isNaN(f) ? 0 : f
+}
+
+/**
+ * Robust date parser for client-supplied date values.
+ * - 'YYYY-MM-DD' (from <input type="date">) → combined with fallbackTime
+ *   (e.g. 'T12:00:00') for hotel-day semantics.
+ * - Full ISO datetime ('2026-09-18T18:11:00.000Z') → parsed as-is, never
+ *   appended to (appending produced Invalid Date and crashed Prisma).
+ * Returns null for missing/unparseable input — caller MUST return a 400
+ * instead of ever handing an Invalid Date to Prisma.
+ */
+function parseDateInput(value: unknown, fallbackTime = 'T12:00:00'): Date | null {
+  if (value === undefined || value === null || value === '') return null
+  const s = String(value).trim()
+  if (!s) return null
+  const d = /\d{2}:\d{2}/.test(s) ? new Date(s.replace(' ', 'T')) : new Date(s + fallbackTime)
+  return isNaN(d.getTime()) ? null : d
+}
+
+/** Recompute UNPAID | PARTIAL | PAID for a booking from its final bill */
+async function refreshBookingPaymentStatus(bookingId: string) {
+  const booking = await DB.booking.findUnique({ where: { id: bookingId } })
+  if (!booking) return
+  let paymentStatus = 'UNPAID'
+  if (booking.status === 'CANCELLED') {
+    paymentStatus = 'PAID' // cancelled bookings carry no balance
+  } else {
+    const bill = await DB.bill.findFirst({
+      where: { bookingId },
+      orderBy: { createdAt: 'desc' },
+    })
+    if (bill) {
+      const paid = bill.payCash + bill.payUpi + bill.payCard
+      if (paid >= bill.grandTotal - 0.01) paymentStatus = 'PAID'
+      else if (paid > 0) paymentStatus = 'PARTIAL'
+    }
+  }
+  if (paymentStatus !== booking.paymentStatus) {
+    await DB.booking.update({ where: { id: bookingId }, data: { paymentStatus } })
+  }
+}
+
+// ============ ROOMS ============
+async function listRooms(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const status = searchParams.get('status')
+  const floor = searchParams.get('floor')
+  const type = searchParams.get('type')
+  const rooms = await DB.room.findMany({
+    where: {
+      ...(status ? { status } : {}),
+      ...(type ? { type } : {}),
+    },
+    orderBy: { number: 'asc' },
+    include: {
+      bookings: { where: { status: 'ACTIVE' }, include: { guest: true }, take: 1 },
+    },
+  })
+  const filtered = floor ? rooms.filter((r) => r.number.startsWith(floor)) : rooms
+  return NextResponse.json(filtered)
+}
+
+async function createRoom(body: Record<string, unknown>) {
+  const { number, type, capacity, rate, notes } = body
+  if (!number) return NextResponse.json({ error: 'Room number required' }, { status: 400 })
+  const exists = await DB.room.findUnique({ where: { number: String(number) } })
+  if (exists) return NextResponse.json({ error: `Room ${number} already exists` }, { status: 400 })
+  const room = await DB.room.create({
+    data: {
+      number: String(number),
+      type: type ? String(type) : 'Non-AC',
+      capacity: parseInt(String(capacity)) || 2,
+      rate: num(rate) || 800,
+      notes: notes ? String(notes) : null,
+    },
+  })
+  return NextResponse.json(room)
+}
+
+async function updateRoom(body: Record<string, unknown>) {
+  const { id, status, housekeeping, rate, type, capacity, notes } = body
+  const room = await DB.room.update({
+    where: { id: String(id) },
+    data: {
+      ...(status !== undefined && { status: String(status) }),
+      ...(housekeeping !== undefined && { housekeeping: String(housekeeping) }),
+      ...(rate !== undefined && { rate: num(rate) }),
+      ...(type !== undefined && { type: String(type) }),
+      ...(capacity !== undefined && { capacity: parseInt(String(capacity)) }),
+      ...(notes !== undefined && { notes: String(notes) }),
+    },
+  })
+  return NextResponse.json(room)
+}
+
+// ============ GUESTS ============
+async function listGuests(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const q = searchParams.get('q')
+  const guests = await DB.guest.findMany({
+    where: q
+      ? { OR: [{ name: { contains: q } }, { phone: { contains: q } }, { company: { contains: q } }] }
+      : undefined,
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+    include: { bookings: { orderBy: { createdAt: 'desc' } } },
+  })
+  return NextResponse.json(guests)
+}
+
+async function lookupGuest(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const phone = searchParams.get('phone') || ''
+  const guest = await DB.guest.findFirst({
+    where: { phone: { contains: phone } },
+    orderBy: { createdAt: 'desc' },
+  })
+  return NextResponse.json(guest || null)
+}
+
+async function upsertGuest(body: Record<string, unknown>) {
+  const { phone, name, company, gst, address, idProof } = body
+  if (!phone || !name) {
+    return NextResponse.json({ error: 'Phone and name are required' }, { status: 400 })
+  }
+  const existing = await DB.guest.findUnique({ where: { phone: String(phone) } })
+  let guest
+  if (existing) {
+    guest = await DB.guest.update({
+      where: { phone: String(phone) },
+      data: {
+        name: String(name),
+        ...(company !== undefined && { company: String(company) }),
+        ...(gst !== undefined && { gst: String(gst) }),
+        ...(address !== undefined && { address: String(address) }),
+        ...(idProof !== undefined && { idProof: String(idProof) }),
+      },
+    })
+  } else {
+    guest = await DB.guest.create({
+      data: {
+        phone: String(phone),
+        name: String(name),
+        ...(company ? { company: String(company) } : {}),
+        ...(gst ? { gst: String(gst) } : {}),
+        ...(address ? { address: String(address) } : {}),
+        ...(idProof ? { idProof: String(idProof) } : {}),
+      },
+    })
+  }
+  return NextResponse.json(guest)
+}
+
+// ============ BOOKINGS ============
+async function listBookings(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const status = searchParams.get('status')
+  const paymentStatus = searchParams.get('paymentStatus')
+  const roomId = searchParams.get('roomId')
+  const guestId = searchParams.get('guestId')
+  const from = searchParams.get('from')
+  const to = searchParams.get('to')
+  const bookings = await DB.booking.findMany({
+    where: {
+      ...(status ? { status } : {}),
+      ...(paymentStatus ? { paymentStatus } : {}),
+      ...(roomId ? { roomId } : {}),
+      ...(guestId ? { guestId } : {}),
+      ...(from || to
+        ? {
+            createdAt: {
+              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+            },
+          }
+        : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+    include: {
+      room: true,
+      guest: true,
+      foodOrders: { where: { status: 'PENDING' } },
+      bills: { orderBy: { createdAt: 'desc' }, take: 1 },
+    },
+  })
+  return NextResponse.json(bookings)
+}
+
+async function createBooking(body: Record<string, unknown>, user: RequestUser) {
+  const {
+    roomId, phone, name, company, gst, address, checkIn, checkOut,
+    guestCount, advance, advanceMethod, isCorporate, notes,
+  } = body
+  if (!roomId || !phone || !name) {
+    return NextResponse.json({ error: 'Room, phone and name are required' }, { status: 400 })
+  }
+  const room = await DB.room.findUnique({ where: { id: String(roomId) } })
+  if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+
+  const checkInDate = checkIn
+    ? parseDateInput(checkIn, 'T12:00:00')
+    : new Date(new Date().setHours(12, 0, 0, 0))
+  if (!checkInDate) {
+    return NextResponse.json(
+      { error: 'Invalid check-in date. Please pick the date again and retry.' },
+      { status: 400 }
+    )
+  }
+  const today = new Date()
+  const isFuture =
+    checkInDate.getFullYear() > today.getFullYear() ||
+    (checkInDate.getFullYear() === today.getFullYear() && checkInDate.getMonth() === today.getMonth() && checkInDate.getDate() > today.getDate())
+
+  if (room.status === 'OCCUPIED') {
+    return NextResponse.json({ error: `Room ${room.number} is already occupied` }, { status: 400 })
+  }
+  if (room.status === 'MAINTENANCE') {
+    return NextResponse.json({ error: `Room ${room.number} is under maintenance` }, { status: 400 })
+  }
+
+  const checkOutDate = checkOut ? parseDateInput(checkOut, 'T11:00:00') : null
+  if (checkOut && !checkOutDate) {
+    return NextResponse.json(
+      { error: 'Invalid check-out date. Please pick the date again and retry.' },
+      { status: 400 }
+    )
+  }
+  let days = 1
+  if (checkOutDate) {
+    const diff = Math.ceil((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24))
+    days = Math.max(1, diff)
+  }
+
+  // ===== DOUBLE-BOOKING PREVENTION =====
+  // Reject if the room already has an ACTIVE or BOOKED stay overlapping [checkIn, checkOut)
+  const overlapFrom = checkOutDate || new Date(checkInDate.getTime() + 24 * 3600 * 1000)
+  const overlapping = await DB.booking.findFirst({
+    where: {
+      roomId: String(roomId),
+      status: { in: ['ACTIVE', 'BOOKED'] },
+      OR: [
+        // existing stay started inside the new range
+        { checkIn: { lt: overlapFrom }, OR: [{ checkOut: { gt: checkInDate } }, { checkOut: null }] },
+      ],
+    },
+  })
+  if (overlapping && !isFuture) {
+    return NextResponse.json(
+      { error: `Room ${room.number} already has a booking for this period (double-booking blocked)` },
+      { status: 400 }
+    )
+  }
+
+  const guest = await DB.guest.upsert({
+    where: { phone: String(phone) },
+    update: {
+      name: String(name),
+      ...(company !== undefined && { company: String(company) }),
+      ...(gst !== undefined && { gst: String(gst) }),
+      ...(address !== undefined && { address: String(address) }),
+    },
+    create: {
+      phone: String(phone),
+      name: String(name),
+      ...(company ? { company: String(company) } : {}),
+      ...(gst ? { gst: String(gst) } : {}),
+      ...(address ? { address: String(address) } : {}),
+    },
+  })
+
+  const booking = await DB.booking.create({
+    data: {
+      roomId: String(roomId),
+      guestId: guest.id,
+      checkIn: checkInDate,
+      checkOut: checkOutDate,
+      days,
+      guestCount: parseInt(String(guestCount)) || 1,
+      ratePerDay: room.rate,
+      status: isFuture ? 'BOOKED' : 'ACTIVE',
+      advance: num(advance),
+      isCorporate: !!isCorporate,
+      notes: notes ? String(notes) : null,
+    },
+    include: { room: true, guest: true },
+  })
+
+  if (!isFuture) {
+    await DB.room.update({ where: { id: String(roomId) }, data: { status: 'OCCUPIED' } })
+  }
+
+  const adv = num(advance)
+  if (adv > 0) {
+    const method = advanceMethod ? String(advanceMethod) : 'CASH'
+    await DB.ledgerEntry.create({
+      data: {
+        date: new Date(),
+        type: 'INCOME',
+        category: 'ADVANCE',
+        description: `Advance from ${name} (Room ${room.number})`,
+        amount: adv,
+        method,
+        source: 'AUTO',
+        refId: booking.id,
+      },
+    })
+  }
+
+  await logAudit(
+    'BOOKING_CREATE',
+    'Booking',
+    booking.id,
+    `${isFuture ? 'Future booking' : 'Check-in'}: ${name} → Room ${room.number}, ${days} night(s) @ ₹${room.rate}${adv > 0 ? `, advance ₹${adv}` : ''}`,
+    user
+  )
+  return NextResponse.json(booking)
+}
+
+async function updateBooking(body: Record<string, unknown>, user: RequestUser) {
+  const { id, action, checkOut, newRoomId } = body
+  const booking = await DB.booking.findUnique({ where: { id: String(id) }, include: { room: true, guest: true } })
+  if (!booking) return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
+
+  if (action === 'checkin') {
+    // For future/BOOKED reservations arriving today
+    if (booking.status !== 'BOOKED') {
+      return NextResponse.json({ error: 'Only booked reservations can be checked in' }, { status: 400 })
+    }
+    const room = await DB.room.findUnique({ where: { id: booking.roomId } })
+    if (!room || room.status === 'OCCUPIED') {
+      return NextResponse.json({ error: `Room ${booking.room.number} is not available` }, { status: 400 })
+    }
+    const updated = await DB.booking.update({
+      where: { id: String(id) },
+      data: { status: 'ACTIVE' },
+    })
+    await DB.room.update({ where: { id: booking.roomId }, data: { status: 'OCCUPIED' } })
+    await logAudit('CHECKIN', 'Booking', booking.id, `Checked in: ${booking.guest.name} → Room ${booking.room.number}`, user)
+    return NextResponse.json(updated)
+  }
+
+  if (action === 'checkout') {
+    const pendingFood = await DB.foodOrder.aggregate({
+      where: { bookingId: String(id), status: 'PENDING' },
+      _sum: { total: true },
+    })
+    if ((pendingFood._sum.total || 0) > 0) {
+      return NextResponse.json(
+        { error: 'Pending food orders exist. Add them to bill or mark paid first.' },
+        { status: 400 }
+      )
+    }
+    const updated = await DB.booking.update({
+      where: { id: String(id) },
+      data: { status: 'COMPLETED', actualCheckOut: new Date() },
+    })
+    await DB.room.update({
+      where: { id: booking.roomId },
+      data: { status: 'VACANT', housekeeping: 'DIRTY' },
+    })
+    await refreshBookingPaymentStatus(booking.id)
+    await logAudit('CHECKOUT', 'Booking', booking.id, `Checked out: ${booking.guest.name} from Room ${booking.room.number} (room marked for cleaning)`, user)
+    return NextResponse.json(updated)
+  }
+
+  if (action === 'extend') {
+    const newCheckOut = checkOut ? parseDateInput(checkOut, 'T11:00:00') : null
+    if (!newCheckOut) return NextResponse.json({ error: 'Valid new checkout date required' }, { status: 400 })
+    const diff = Math.ceil(
+      (newCheckOut.getTime() - new Date(booking.checkIn).getTime()) / (1000 * 60 * 60 * 24)
+    )
+    const days = Math.max(1, diff)
+    const updated = await DB.booking.update({
+      where: { id: String(id) },
+      data: { checkOut: newCheckOut, days },
+    })
+    await logAudit('EXTEND', 'Booking', booking.id, `Stay extended: ${booking.guest.name} (Room ${booking.room.number}) → new checkout ${newCheckOut.toDateString()}`, user)
+    return NextResponse.json(updated)
+  }
+
+  if (action === 'change-room') {
+    if (!newRoomId) return NextResponse.json({ error: 'New room required' }, { status: 400 })
+    if (booking.status !== 'ACTIVE') {
+      return NextResponse.json({ error: 'Only active (in-house) bookings can change room' }, { status: 400 })
+    }
+    const newRoom = await DB.room.findUnique({ where: { id: String(newRoomId) } })
+    if (!newRoom) return NextResponse.json({ error: 'New room not found' }, { status: 404 })
+    if (newRoom.status !== 'VACANT') {
+      return NextResponse.json({ error: `Room ${newRoom.number} is not vacant` }, { status: 400 })
+    }
+    await DB.room.update({ where: { id: booking.roomId }, data: { status: 'VACANT', housekeeping: 'DIRTY' } })
+    await DB.room.update({ where: { id: newRoom.id }, data: { status: 'OCCUPIED' } })
+    await DB.booking.update({ where: { id: booking.id }, data: { roomId: newRoom.id } })
+    // Re-point pending food orders to the new room
+    await DB.foodOrder.updateMany({
+      where: { bookingId: booking.id, status: 'PENDING' },
+      data: { roomId: newRoom.id },
+    })
+    await logAudit('CHANGE_ROOM', 'Booking', booking.id, `Room change: ${booking.guest.name} moved ${booking.room.number} → ${newRoom.number}`, user)
+    const updated = await DB.booking.findUnique({
+      where: { id: String(id) },
+      include: { room: true, guest: true },
+    })
+    return NextResponse.json(updated)
+  }
+
+  if (action === 'cancel') {
+    const updated = await DB.booking.update({
+      where: { id: String(id) },
+      data: { status: 'CANCELLED', actualCheckOut: new Date() },
+    })
+    if (booking.status === 'ACTIVE') {
+      await DB.room.update({
+        where: { id: booking.roomId },
+        data: { status: 'VACANT', housekeeping: 'DIRTY' },
+      })
+    }
+    await refreshBookingPaymentStatus(booking.id)
+    await logAudit('BOOKING_CANCEL', 'Booking', booking.id, `Cancelled: ${booking.guest.name} (Room ${booking.room.number})`, user)
+    return NextResponse.json(updated)
+  }
+
+  return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
+}
+
+// ============ BILLS ============
+async function listBills(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const date = searchParams.get('date')
+  const from = searchParams.get('from')
+  const to = searchParams.get('to')
+  let where: Record<string, unknown> = {}
+  if (date) {
+    const start = new Date(date + 'T00:00:00')
+    const end = new Date(date + 'T23:59:59.999')
+    where = { createdAt: { gte: start, lte: end } }
+  } else if (from || to) {
+    where = {
+      createdAt: {
+        ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+        ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+      },
+    }
+  }
+  const bills = await DB.bill.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+    include: { booking: { include: { room: true, guest: true } } },
+  })
+  return NextResponse.json(bills)
+}
+
+async function createBill(body: Record<string, unknown>, user: RequestUser) {
+  const {
+    bookingId, days, billedRoomTotal, gstPercent, extraCharges, discount,
+    payCash, payUpi, payCard, includeFood, corporateName, gstNumber, notes, checkout,
+    managerPin,
+  } = body
+
+  const booking = await DB.booking.findUnique({
+    where: { id: String(bookingId) },
+    include: { room: true, guest: true },
+  })
+  if (!booking) return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
+
+  const settings = await getSettingsMap()
+
+  const billDays = parseInt(String(days)) || booking.days
+  const actualRoomTotal = booking.ratePerDay * billDays
+  const customRoom = parseFloat(String(billedRoomTotal))
+  const billedRoom = !isNaN(customRoom) && customRoom > 0 ? customRoom : actualRoomTotal
+
+  // ===== PERMISSION CONTROL for custom corporate billing =====
+  const isCustom = Math.abs(billedRoom - actualRoomTotal) > 0.01
+  if (isCustom) {
+    if (!user.id || !managerPin) {
+      return NextResponse.json(
+        { error: 'Custom billing requires manager approval (PIN required)' },
+        { status: 403 }
+      )
+    }
+    const approver = await DB.user.findUnique({ where: { id: String(user.id) } })
+    if (
+      !approver ||
+      !approver.active ||
+      approver.pin !== String(managerPin) ||
+      !['ADMIN', 'MANAGER'].includes(approver.role)
+    ) {
+      return NextResponse.json(
+        { error: 'Custom billing blocked: invalid manager PIN or insufficient role' },
+        { status: 403 }
+      )
+    }
+    user = { id: user.id, name: approver.name, role: approver.role }
+  }
+
+  let foodTotal = 0
+  let pendingOrders: { id: string }[] = []
+  if (includeFood !== false) {
+    pendingOrders = await DB.foodOrder.findMany({
+      where: { bookingId: booking.id, status: 'PENDING' },
+      select: { id: true },
+    })
+    const agg = await DB.foodOrder.aggregate({
+      where: { bookingId: booking.id, status: 'PENDING' },
+      _sum: { total: true },
+    })
+    foodTotal = agg._sum.total || 0
+  }
+
+  const extra = num(extraCharges)
+  const disc = num(discount)
+  const gstPct = gstPercent !== undefined && gstPercent !== '' ? num(gstPercent) : parseFloat(settings.gstPercent) || 0
+  const taxable = Math.max(0, billedRoom + foodTotal + extra - disc)
+  const billedGst = Math.round(taxable * gstPct) / 100
+
+  // Advance deducted from final payable (already recorded as income at check-in)
+  const advanceApplied = Math.min(booking.advance, taxable + billedGst)
+  const grandTotal = Math.max(0, Math.round((taxable + billedGst - advanceApplied) * 100) / 100)
+
+  const cash = num(payCash)
+  const upi = num(payUpi)
+  const card = num(payCard)
+  const paidTotal = cash + upi + card
+  if (paidTotal > grandTotal + 0.01) {
+    return NextResponse.json(
+      { error: `Payment split (₹${paidTotal}) cannot exceed bill total (₹${grandTotal})` },
+      { status: 400 }
+    )
+  }
+
+  // ===== INVOICE NUMBERING from settings =====
+  const prefix = settings.invoicePrefix || 'INV'
+  let counter = parseInt(settings.invoiceCounter) || 1
+  const billNumber = `${prefix}-${String(counter).padStart(4, '0')}`
+  await DB.setting.update({ where: { key: 'invoiceCounter' }, data: { value: String(counter + 1) } })
+
+  const bill = await DB.bill.create({
+    data: {
+      billNumber,
+      bookingId: booking.id,
+      days: billDays,
+      actualRoomTotal,
+      billedRoomTotal: billedRoom,
+      gstPercent: gstPct,
+      actualGst: billedGst,
+      foodTotal,
+      extraCharges: extra,
+      discount: disc,
+      grandTotal,
+      payCash: cash,
+      payUpi: upi,
+      payCard: card,
+      advanceApplied,
+      isCorporate: billedRoom !== actualRoomTotal || !!booking.isCorporate,
+      corporateName: corporateName ? String(corporateName) : booking.guest.company || null,
+      gstNumber: gstNumber ? String(gstNumber) : booking.guest.gst || null,
+      createdBy: user.name || null,
+      approvedBy: isCustom ? user.name || null : null,
+      notes: notes ? String(notes) : null,
+    },
+  })
+
+  if (pendingOrders.length > 0) {
+    await DB.foodOrder.updateMany({
+      where: { id: { in: pendingOrders.map((o) => o.id) } },
+      data: { status: 'ADDED_TO_BILL' },
+    })
+  }
+
+  // ===== ACCOUNT CREDIT BALANCING =====
+  // Internal accounts credit ONLY actual room rate + billed GST (+ food).
+  const ledgerEntries: {
+    date: Date
+    type: string
+    category: string
+    description: string
+    amount: number
+    method: string
+    source: string
+    refId: string
+  }[] = []
+
+  if (actualRoomTotal > 0) {
+    ledgerEntries.push({
+      date: new Date(),
+      type: 'INCOME',
+      category: 'ROOM_RENT',
+      description: `Room ${booking.room.number} rent (${billDays} day${billDays > 1 ? 's' : ''} @ ₹${booking.ratePerDay}) - ${booking.guest.name}`,
+      amount: actualRoomTotal,
+      method: 'SPLIT',
+      source: 'AUTO',
+      refId: bill.id,
+    })
+  }
+  if (foodTotal > 0) {
+    ledgerEntries.push({
+      date: new Date(),
+      type: 'INCOME',
+      category: 'FOOD',
+      description: `Food charges - Room ${booking.room.number} - ${booking.guest.name}`,
+      amount: foodTotal,
+      method: 'SPLIT',
+      source: 'AUTO',
+      refId: bill.id,
+    })
+  }
+  if (billedGst > 0) {
+    ledgerEntries.push({
+      date: new Date(),
+      type: 'INCOME',
+      category: 'GST',
+      description: `GST ${gstPct}% on bill ${billNumber}${billedRoom !== actualRoomTotal ? ' (on billed amount)' : ''}`,
+      amount: billedGst,
+      method: 'SPLIT',
+      source: 'AUTO',
+      refId: bill.id,
+    })
+  }
+  if (ledgerEntries.length > 0) {
+    await DB.ledgerEntry.createMany({ data: ledgerEntries })
+  }
+
+  await refreshBookingPaymentStatus(booking.id)
+
+  if (isCustom) {
+    await logAudit(
+      'CUSTOM_BILL',
+      'Bill',
+      bill.id,
+      `Invoice ${billNumber}: customer billed ₹${billedRoom} vs actual tariff ₹${actualRoomTotal} (Room ${booking.room.number}, ${booking.guest.name}). Internal ledger kept actual tariff.`,
+      user
+    )
+  } else {
+    await logAudit(
+      'BILL_CREATE',
+      'Bill',
+      bill.id,
+      `Invoice ${billNumber} generated for Room ${booking.room.number} (${booking.guest.name}) — total ₹${grandTotal}`,
+      user
+    )
+  }
+
+  if (checkout !== false) {
+    await DB.booking.update({
+      where: { id: booking.id },
+      data: { status: 'COMPLETED', actualCheckOut: new Date() },
+    })
+    await DB.room.update({
+      where: { id: booking.roomId },
+      data: { status: 'VACANT', housekeeping: 'DIRTY' },
+    })
+  }
+
+  return NextResponse.json({ ...bill, booking })
+}
+
+/** Record an additional payment against an existing bill (outstanding balance) */
+async function addBillPayment(body: Record<string, unknown>, user: RequestUser) {
+  const { id, payCash, payUpi, payCard } = body
+  const bill = await DB.bill.findUnique({ where: { id: String(id) }, include: { booking: { include: { guest: true, room: true } } } })
+  if (!bill) return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+
+  const cash = num(payCash)
+  const upi = num(payUpi)
+  const card = num(payCard)
+  const adding = cash + upi + card
+  if (adding <= 0) return NextResponse.json({ error: 'Payment amount required' }, { status: 400 })
+
+  const alreadyPaid = bill.payCash + bill.payUpi + bill.payCard
+  if (alreadyPaid + adding > bill.grandTotal + 0.01) {
+    return NextResponse.json(
+      { error: `Payment exceeds outstanding balance (₹${(bill.grandTotal - alreadyPaid).toFixed(2)})` },
+      { status: 400 }
+    )
+  }
+
+  const updated = await DB.bill.update({
+    where: { id: bill.id },
+    data: {
+      payCash: bill.payCash + cash,
+      payUpi: bill.payUpi + upi,
+      payCard: bill.payCard + card,
+    },
+  })
+  await refreshBookingPaymentStatus(bill.bookingId)
+  await logAudit(
+    'PAYMENT',
+    'Bill',
+    bill.id,
+    `Payment received on ${bill.billNumber}: ₹${adding} (${[cash > 0 ? `Cash ₹${cash}` : '', upi > 0 ? `UPI ₹${upi}` : '', card > 0 ? `Card ₹${card}` : ''].filter(Boolean).join(' + ')}) — ${bill.booking.guest.name}`,
+    user
+  )
+  return NextResponse.json(updated)
+}
+
+// ============ MENU ============
+async function listMenu() {
+  const items = await DB.menuItem.findMany({ orderBy: [{ category: 'asc' }, { name: 'asc' }] })
+  return NextResponse.json(items)
+}
+
+async function createMenuItem(body: Record<string, unknown>) {
+  const { name, category, price } = body
+  if (!name || !price) {
+    return NextResponse.json({ error: 'Name and price required' }, { status: 400 })
+  }
+  const item = await DB.menuItem.create({
+    data: {
+      name: String(name),
+      category: category ? String(category) : 'Main Course',
+      price: num(price),
+    },
+  })
+  return NextResponse.json(item)
+}
+
+async function updateMenuItem(body: Record<string, unknown>) {
+  const { id, name, category, price, available } = body
+  const item = await DB.menuItem.update({
+    where: { id: String(id) },
+    data: {
+      ...(name !== undefined && { name: String(name) }),
+      ...(category !== undefined && { category: String(category) }),
+      ...(price !== undefined && { price: num(price) }),
+      ...(available !== undefined && { available: !!available }),
+    },
+  })
+  return NextResponse.json(item)
+}
+
+async function deleteMenuItem(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+  await DB.menuItem.delete({ where: { id } })
+  return NextResponse.json({ ok: true })
+}
+
+// ============ FOOD ORDERS ============
+async function listOrders(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const status = searchParams.get('status')
+  const from = searchParams.get('from')
+  const to = searchParams.get('to')
+  const orders = await DB.foodOrder.findMany({
+    where: {
+      ...(status ? { status } : {}),
+      ...(from || to
+        ? {
+            createdAt: {
+              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+            },
+          }
+        : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 300,
+    include: { items: true, room: true, booking: { include: { guest: true } } },
+  })
+  return NextResponse.json(orders)
+}
+
+async function createOrder(body: Record<string, unknown>, user: RequestUser) {
+  const { bookingId, roomId, tableNo, items, notes } = body
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    return NextResponse.json({ error: 'At least one item required' }, { status: 400 })
+  }
+  const total = items.reduce(
+    (s: number, it: { price: number; quantity: number }) => s + it.price * it.quantity,
+    0
+  )
+  const order = await DB.foodOrder.create({
+    data: {
+      bookingId: bookingId ? String(bookingId) : null,
+      roomId: roomId ? String(roomId) : null,
+      tableNo: tableNo ? String(tableNo) : null,
+      total,
+      createdBy: user.name || null,
+      notes: notes ? String(notes) : null,
+      items: {
+        create: items.map((it: { menuItemId?: string; name: string; price: number; quantity: number }) => ({
+          menuItemId: it.menuItemId || null,
+          name: String(it.name),
+          price: it.price,
+          quantity: it.quantity,
+        })),
+      },
+    },
+    include: { items: true, room: true, booking: { include: { guest: true } } },
+  })
+  await logAudit(
+    'ORDER',
+    'FoodOrder',
+    order.id,
+    `Food order ${order.total > 0 ? `₹${total}` : ''} ${order.room ? `for Room ${order.room.number}` : order.tableNo ? `at Table ${order.tableNo}` : ''} (${items.length} item(s))`,
+    user
+  )
+  return NextResponse.json(order)
+}
+
+async function updateOrder(body: Record<string, unknown>, user: RequestUser) {
+  const { id, action, method } = body
+  const order = await DB.foodOrder.findUnique({ where: { id: String(id) }, include: { items: true, room: true } })
+  if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+
+  if (action === 'paid') {
+    const payMethod = method ? String(method) : 'CASH'
+    const updated = await DB.foodOrder.update({ where: { id: String(id) }, data: { status: 'PAID' } })
+    await DB.ledgerEntry.create({
+      data: {
+        date: new Date(),
+        type: 'INCOME',
+        category: 'FOOD',
+        description: `Restaurant order${order.tableNo ? ` (Table ${order.tableNo})` : ''}${order.room ? ` - Room ${order.room.number}` : ''}`,
+        amount: order.total,
+        method: payMethod,
+        source: 'AUTO',
+        refId: order.id,
+      },
+    })
+    await logAudit('ORDER_PAID', 'FoodOrder', order.id, `Direct restaurant payment ₹${order.total} via ${payMethod}`, user)
+    return NextResponse.json(updated)
+  }
+  return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
+}
+
+// ============ STAFF ============
+async function listStaff(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const q = searchParams.get('q')
+  const role = searchParams.get('role')
+  const staff = await DB.staff.findMany({
+    where: {
+      ...(role ? { role } : {}),
+      ...(q
+        ? { OR: [{ name: { contains: q } }, { phone: { contains: q } }, { role: { contains: q } }] }
+        : {}),
+    },
+    orderBy: { name: 'asc' },
+    include: { payments: { orderBy: { date: 'desc' } } },
+  })
+  return NextResponse.json(staff)
+}
+
+async function createStaff(body: Record<string, unknown>) {
+  const { name, phone, role, salary, joinDate, address, aadhaar } = body
+  if (!name) return NextResponse.json({ error: 'Name required' }, { status: 400 })
+  const staff = await DB.staff.create({
+    data: {
+      name: String(name),
+      phone: phone ? String(phone) : null,
+      role: role ? String(role) : 'Staff',
+      salary: num(salary),
+      joinDate: joinDate ? new Date(String(joinDate)) : new Date(),
+      address: address ? String(address) : null,
+      aadhaar: aadhaar ? String(aadhaar) : null,
+    },
+  })
+  return NextResponse.json(staff)
+}
+
+async function updateStaff(body: Record<string, unknown>) {
+  const { id, name, phone, role, salary, address, aadhaar, active } = body
+  const staff = await DB.staff.update({
+    where: { id: String(id) },
+    data: {
+      ...(name !== undefined && { name: String(name) }),
+      ...(phone !== undefined && { phone: String(phone) }),
+      ...(role !== undefined && { role: String(role) }),
+      ...(salary !== undefined && { salary: num(salary) }),
+      ...(address !== undefined && { address: String(address) }),
+      ...(aadhaar !== undefined && { aadhaar: String(aadhaar) }),
+      ...(active !== undefined && { active: !!active }),
+    },
+  })
+  return NextResponse.json(staff)
+}
+
+// ============ STAFF PAYMENTS ============
+async function listStaffPayments(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const staffId = searchParams.get('staffId')
+  const type = searchParams.get('type')
+  const from = searchParams.get('from')
+  const to = searchParams.get('to')
+  const payments = await DB.staffPayment.findMany({
+    where: {
+      ...(staffId ? { staffId } : {}),
+      ...(type ? { type } : {}),
+      ...(from || to
+        ? {
+            date: {
+              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+            },
+          }
+        : {}),
+    },
+    orderBy: { date: 'desc' },
+    take: 500,
+    include: { staff: true },
+  })
+  return NextResponse.json(payments)
+}
+
+async function createStaffPayment(body: Record<string, unknown>, user: RequestUser) {
+  const { staffId, type, amount, method, date, notes, recoveryNotes } = body
+  if (!staffId || !amount) {
+    return NextResponse.json({ error: 'Staff and amount required' }, { status: 400 })
+  }
+  const staff = await DB.staff.findUnique({ where: { id: String(staffId) } })
+  if (!staff) return NextResponse.json({ error: 'Staff not found' }, { status: 404 })
+
+  const amt = num(amount)
+  const payMethod = method ? String(method) : 'CASH'
+  const payment = await DB.staffPayment.create({
+    data: {
+      staffId: String(staffId),
+      type: type ? String(type) : 'SALARY',
+      amount: amt,
+      method: payMethod,
+      date: (parseDateInput(date, 'T12:00:00') as Date) || new Date(),
+      recoveryNotes: recoveryNotes ? String(recoveryNotes) : null,
+      notes: notes ? String(notes) : null,
+    },
+    include: { staff: true },
+  })
+
+  // Salary/bonus/advance are operational outflows in the daily ledger
+  const category = payment.type === 'ADVANCE' ? 'STAFF_ADVANCE' : 'SALARY'
+  await DB.ledgerEntry.create({
+    data: {
+      date: payment.date,
+      type: 'EXPENSE',
+      category,
+      description: `${payment.type === 'BONUS' ? 'Bonus' : payment.type === 'ADVANCE' ? 'Salary advance' : 'Salary'} - ${staff.name}${payment.recoveryNotes ? ` (recovery: ${payment.recoveryNotes})` : ''}`,
+      amount: amt,
+      method: payMethod === 'BANK' ? 'BANK' : payMethod,
+      source: 'AUTO',
+      vendor: staff.name,
+      refId: payment.id,
+    },
+  })
+  await logAudit('STAFF_PAYMENT', 'StaffPayment', payment.id, `${payment.type} ₹${amt} to ${staff.name} via ${payMethod}`, user)
+  return NextResponse.json(payment)
+}
+
+// ============ LEDGER ============
+async function listLedger(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const date = searchParams.get('date')
+  const from = searchParams.get('from')
+  const to = searchParams.get('to')
+  const type = searchParams.get('type')
+  const category = searchParams.get('category')
+  const q = searchParams.get('q')
+
+  let where: Record<string, unknown> = {}
+  if (date) {
+    const start = new Date(date + 'T00:00:00')
+    const end = new Date(date + 'T23:59:59.999')
+    where = { date: { gte: start, lte: end } }
+  } else if (from || to) {
+    where = {
+      date: {
+        ...(from && { gte: new Date(from + 'T00:00:00') }),
+        ...(to && { lte: new Date(to + 'T23:59:59.999') }),
+      },
+    }
+  }
+  if (type) where = { ...where, type }
+  if (category) where = { ...where, category }
+  if (q) {
+    where = {
+      ...where,
+      OR: [{ description: { contains: q } }, { vendor: { contains: q } }],
+    }
+  }
+
+  const entries = await DB.ledgerEntry.findMany({
+    where,
+    orderBy: { date: 'desc' },
+    take: 1000,
+  })
+  const totalIncome = entries.filter((e) => e.type === 'INCOME').reduce((s, e) => s + e.amount, 0)
+  const totalExpense = entries.filter((e) => e.type === 'EXPENSE').reduce((s, e) => s + e.amount, 0)
+  return NextResponse.json({
+    entries,
+    totalIncome,
+    totalExpense,
+    net: totalIncome - totalExpense,
+  })
+}
+
+async function createLedgerEntry(body: Record<string, unknown>, user: RequestUser) {
+  const { type, category, description, amount, method, date, vendor } = body
+  if (!type || !amount || !description) {
+    return NextResponse.json({ error: 'Type, description and amount required' }, { status: 400 })
+  }
+  const entry = await DB.ledgerEntry.create({
+    data: {
+      type: type === 'INCOME' ? 'INCOME' : 'EXPENSE',
+      category: category ? String(category) : 'OTHER',
+      description: String(description),
+      amount: num(amount),
+      method: method ? String(method) : 'CASH',
+      vendor: vendor ? String(vendor) : null,
+      source: 'MANUAL',
+      date: (parseDateInput(date, 'T12:00:00') as Date) || new Date(),
+    },
+  })
+  await logAudit(type === 'INCOME' ? 'LEDGER_INCOME' : 'EXPENSE', 'LedgerEntry', entry.id, `${type} ₹${amount} — ${description}`, user)
+  return NextResponse.json(entry)
+}
+
+// ============ STATS ============
+async function getStats() {
+  const now = new Date()
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const endToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59.999)
+
+  const [rooms, activeBookings, bookedFuture, todayBills, todayLedger, pendingFood, allActiveBills] = await Promise.all([
+    DB.room.findMany({ select: { status: true, housekeeping: true, rate: true } }),
+    DB.booking.findMany({
+      where: { status: 'ACTIVE' },
+      include: { guest: true, room: true },
+      orderBy: { checkIn: 'asc' },
+    }),
+    DB.booking.count({ where: { status: 'BOOKED' } }),
+    DB.bill.findMany({ where: { createdAt: { gte: startToday, lte: endToday } } }),
+    DB.ledgerEntry.findMany({ where: { date: { gte: startToday, lte: endToday } } }),
+    DB.foodOrder.aggregate({ where: { status: 'PENDING' }, _sum: { total: true } }),
+    DB.bill.findMany(),
+  ])
+
+  const vacant = rooms.filter((r) => r.status === 'VACANT').length
+  const occupied = rooms.filter((r) => r.status === 'OCCUPIED').length
+  const maintenance = rooms.filter((r) => r.status === 'MAINTENANCE').length
+  const dirtyRooms = rooms.filter((r) => r.housekeeping === 'DIRTY').length
+  const todayRevenue = todayBills.reduce((s, b) => s + b.grandTotal, 0)
+  const income = todayLedger.filter((e) => e.type === 'INCOME').reduce((s, e) => s + e.amount, 0)
+  const expense = todayLedger.filter((e) => e.type === 'EXPENSE').reduce((s, e) => s + e.amount, 0)
+  const potentialRevenue = rooms.filter((r) => r.status === 'OCCUPIED').reduce((s, r) => s + r.rate, 0)
+
+  // Today's arrivals (checked in today) and departures (expected checkout today)
+  const arrivals = activeBookings.filter((b) => {
+    const ci = new Date(b.checkIn)
+    return ci >= startToday && ci <= endToday
+  })
+  const departures = activeBookings.filter((b) => {
+    if (!b.checkOut) return false
+    const co = new Date(b.checkOut)
+    return co >= startToday && co <= endToday
+  })
+
+  // Outstanding balances from all bills
+  const outstanding = allActiveBills.reduce((s, b) => {
+    const paid = b.payCash + b.payUpi + b.payCard
+    const balance = b.grandTotal - paid
+    return balance > 0.01 ? s + balance : s
+  }, 0)
+
+  return NextResponse.json({
+    totalRooms: rooms.length,
+    vacant,
+    occupied,
+    maintenance,
+    dirtyRooms,
+    occupancyPercent: rooms.length ? Math.round((occupied / rooms.length) * 100) : 0,
+    activeGuests: activeBookings.length,
+    bookedFuture,
+    activeBookings: activeBookings.map((b) => ({
+      id: b.id,
+      guestName: b.guest.name,
+      guestPhone: b.guest.phone,
+      roomNumber: b.room.number,
+      checkIn: b.checkIn,
+      checkOut: b.checkOut,
+      days: b.days,
+      ratePerDay: b.ratePerDay,
+      paymentStatus: b.paymentStatus,
+    })),
+    arrivals: arrivals.map((b) => ({
+      id: b.id,
+      guestName: b.guest.name,
+      roomNumber: b.room.number,
+      checkIn: b.checkIn,
+      days: b.days,
+    })),
+    departures: departures.map((b) => ({
+      id: b.id,
+      guestName: b.guest.name,
+      roomNumber: b.room.number,
+      checkOut: b.checkOut,
+      billOutstanding:
+        todayBills
+          .filter((bill) => bill.bookingId === b.id)
+          .reduce((s, bill) => s + (bill.grandTotal - bill.payCash - bill.payUpi - bill.payCard), 0) || 0,
+    })),
+    todayRevenue,
+    todayCash: todayBills.reduce((s, b) => s + b.payCash, 0),
+    todayUpi: todayBills.reduce((s, b) => s + b.payUpi, 0),
+    todayCard: todayBills.reduce((s, b) => s + b.payCard, 0),
+    todayIncome: income,
+    todayExpense: expense,
+    todayNet: income - expense,
+    outstanding,
+    pendingFoodAmount: pendingFood._sum.total || 0,
+    potentialRevenue,
+  })
+}
+
+// ============ SETTINGS ============
+async function getSettings() {
+  const map = await getSettingsMap()
+  return NextResponse.json(map)
+}
+
+async function updateSettings(body: Record<string, unknown>, user: RequestUser) {
+  const updates = body as Record<string, string>
+  const allowed = Object.keys(DEFAULT_SETTINGS)
+  for (const key of allowed) {
+    if (updates[key] !== undefined) {
+      await DB.setting.upsert({
+        where: { key },
+        update: { value: String(updates[key]) },
+        create: { key, value: String(updates[key]) },
+      })
+    }
+  }
+  await logAudit('SETTINGS', 'Setting', null, `Settings updated: ${Object.keys(updates).filter((k) => allowed.includes(k)).join(', ')}`, user)
+  return NextResponse.json(await getSettingsMap())
+}
+
+// ============ USERS & AUTH ============
+async function listUsers() {
+  const users = await DB.user.findMany({
+    select: { id: true, name: true, role: true, active: true, createdAt: true },
+    orderBy: { createdAt: 'asc' },
+  })
+  return NextResponse.json(users)
+}
+
+async function createUser(body: Record<string, unknown>, user: RequestUser) {
+  const { name, role, pin } = body
+  if (!name || !pin) return NextResponse.json({ error: 'Name and PIN required' }, { status: 400 })
+  const exists = await DB.user.findUnique({ where: { name: String(name) } })
+  if (exists) return NextResponse.json({ error: 'User name already exists' }, { status: 400 })
+  const created = await DB.user.create({
+    data: { name: String(name), role: role ? String(role) : 'RECEPTION', pin: String(pin) },
+  })
+  await logAudit('USER_CREATE', 'User', created.id, `App user created: ${created.name} (${created.role})`, user)
+  return NextResponse.json({ id: created.id, name: created.name, role: created.role, active: created.active })
+}
+
+async function updateUser(body: Record<string, unknown>, user: RequestUser) {
+  const { id, name, role, pin, active } = body
+  const updated = await DB.user.update({
+    where: { id: String(id) },
+    data: {
+      ...(name !== undefined && { name: String(name) }),
+      ...(role !== undefined && { role: String(role) }),
+      ...(pin !== undefined && { pin: String(pin) }),
+      ...(active !== undefined && { active: !!active }),
+    },
+  })
+  await logAudit('USER_UPDATE', 'User', updated.id, `App user updated: ${updated.name} (${updated.role})`, user)
+  return NextResponse.json({ id: updated.id, name: updated.name, role: updated.role, active: updated.active })
+}
+
+async function login(body: Record<string, unknown>) {
+  const { userId, pin } = body
+  if (!userId || !pin) return NextResponse.json({ error: 'User and PIN required' }, { status: 400 })
+  const user = await DB.user.findUnique({ where: { id: String(userId) } })
+  if (!user || !user.active || user.pin !== String(pin)) {
+    return NextResponse.json({ error: 'Invalid user or PIN' }, { status: 401 })
+  }
+  return NextResponse.json({ id: user.id, name: user.name, role: user.role })
+}
+
+// ============ AUDIT ============
+async function listAudit(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const action = searchParams.get('action')
+  const q = searchParams.get('q')
+  const from = searchParams.get('from')
+  const to = searchParams.get('to')
+  const logs = await DB.auditLog.findMany({
+    where: {
+      ...(action ? { action } : {}),
+      ...(q
+        ? {
+            OR: [
+              { details: { contains: q } },
+              { userName: { contains: q } },
+            ],
+          }
+        : {}),
+      ...(from || to
+        ? {
+            createdAt: {
+              ...(from ? { gte: new Date(from + 'T00:00:00') } : {}),
+              ...(to ? { lte: new Date(to + 'T23:59:59.999') } : {}),
+            },
+          }
+        : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 500,
+  })
+  return NextResponse.json(logs)
+}
+
+// ============ EXPENSE CATEGORIES ============
+async function listExpenseCategories() {
+  const cats = await DB.expenseCategory.findMany({ orderBy: { name: 'asc' } })
+  return NextResponse.json(cats)
+}
+
+async function createExpenseCategory(body: Record<string, unknown>) {
+  const { name } = body
+  if (!name) return NextResponse.json({ error: 'Name required' }, { status: 400 })
+  const exists = await DB.expenseCategory.findUnique({ where: { name: String(name) } })
+  if (exists) return NextResponse.json({ error: 'Category already exists' }, { status: 400 })
+  const cat = await DB.expenseCategory.create({ data: { name: String(name) } })
+  return NextResponse.json(cat)
+}
+
+async function updateExpenseCategory(body: Record<string, unknown>) {
+  const { id, name, active } = body
+  const cat = await DB.expenseCategory.update({
+    where: { id: String(id) },
+    data: {
+      ...(name !== undefined && { name: String(name) }),
+      ...(active !== undefined && { active: !!active }),
+    },
+  })
+  return NextResponse.json(cat)
+}
+
+async function deleteExpenseCategory(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+  try {
+    await DB.expenseCategory.delete({ where: { id } })
+  } catch {
+    return NextResponse.json({ error: 'Cannot delete (may be in use)' }, { status: 400 })
+  }
+  return NextResponse.json({ ok: true })
+}
+
+// ============ GLOBAL SEARCH ============
+async function globalSearch(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const q = (searchParams.get('q') || '').trim()
+  if (!q || q.length < 1) {
+    return NextResponse.json({ guests: [], bookings: [], bills: [], rooms: [] })
+  }
+
+  const [guests, bills, rooms] = await Promise.all([
+    DB.guest.findMany({
+      where: { OR: [{ name: { contains: q } }, { phone: { contains: q } }, { company: { contains: q } }] },
+      take: 5,
+      include: { bookings: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    }),
+    DB.bill.findMany({
+      where: { billNumber: { contains: q.toUpperCase() } },
+      take: 5,
+      include: { booking: { include: { room: true, guest: true } } },
+    }),
+    DB.room.findMany({
+      where: { number: { contains: q } },
+      take: 5,
+      include: { bookings: { where: { status: 'ACTIVE' }, include: { guest: true }, take: 1 } },
+    }),
+  ])
+
+  // Booking id search (exact prefix)
+  const bookings = q.length > 5
+    ? await DB.booking.findMany({
+        where: { id: { startsWith: q } },
+        take: 3,
+        include: { room: true, guest: true },
+      })
+    : []
+
+  return NextResponse.json({ guests, bookings, bills, rooms })
+}
+
+// ============ REPORTS ============
+async function getReports(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const today = new Date()
+  const defFrom = new Date(today.getFullYear(), today.getMonth(), 1)
+  const fromStr = searchParams.get('from') || defFrom.toISOString().slice(0, 10)
+  const toStr = searchParams.get('to') || today.toISOString().slice(0, 10)
+  const start = new Date(fromStr + 'T00:00:00')
+  const end = new Date(toStr + 'T23:59:59.999')
+
+  const [bills, orders, ledger, bookings, staffPays, rooms, activeBookings] = await Promise.all([
+    DB.bill.findMany({
+      where: { createdAt: { gte: start, lte: end } },
+      include: { booking: { include: { room: true, guest: true } } },
+      orderBy: { createdAt: 'desc' },
+    }),
+    DB.foodOrder.findMany({
+      where: { createdAt: { gte: start, lte: end }, status: 'PAID' },
+      include: { items: true, room: true },
+    }),
+    DB.ledgerEntry.findMany({ where: { date: { gte: start, lte: end } } }),
+    DB.booking.findMany({
+      where: { createdAt: { gte: start, lte: end } },
+      include: { room: true, guest: true },
+    }),
+    DB.staffPayment.findMany({
+      where: { date: { gte: start, lte: end } },
+      include: { staff: true },
+    }),
+    DB.room.findMany({ select: { status: true, rate: true } }),
+    DB.booking.findMany({ where: { status: 'ACTIVE' }, include: { guest: true, room: true } }),
+  ])
+
+  const occupiedRooms = rooms.filter((r) => r.status === 'OCCUPIED').length
+  const daysDiff = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)))
+  const roomNights = bills.reduce((s, b) => s + b.days, 0)
+
+  // Outstanding by booking
+  const outstandingBookings = await DB.bill.findMany({
+    include: { booking: { include: { room: true, guest: true } } },
+  })
+  const outstandingRows = outstandingBookings
+    .map((b) => ({
+      billNumber: b.billNumber,
+      bookingId: b.bookingId,
+      guestName: b.booking.guest.name,
+      phone: b.booking.guest.phone,
+      roomNumber: b.booking.room.number,
+      grandTotal: b.grandTotal,
+      paid: b.payCash + b.payUpi + b.payCard,
+      balance: Math.max(0, b.grandTotal - b.payCash - b.payUpi - b.payCard),
+      createdAt: b.createdAt,
+    }))
+    .filter((r) => r.balance > 0.01)
+    .sort((a, b) => b.balance - a.balance)
+
+  // Expense summary by category
+  const expenseByCategory: Record<string, number> = {}
+  for (const e of ledger.filter((x) => x.type === 'EXPENSE')) {
+    expenseByCategory[e.category] = (expenseByCategory[e.category] || 0) + e.amount
+  }
+
+  // Custom invoices in range
+  const customBills = bills.filter((b) => b.billedRoomTotal !== b.actualRoomTotal)
+
+  return NextResponse.json({
+    range: { from: fromStr, to: toStr, days: daysDiff },
+    occupancy: {
+      totalRooms: rooms.length,
+      occupiedNow: occupiedRooms,
+      vacantNow: rooms.filter((r) => r.status === 'VACANT').length,
+      occupancyPercent: rooms.length ? Math.round((occupiedRooms / rooms.length) * 100) : 0,
+      roomNightsSold: roomNights,
+      bookingsCount: bookings.length,
+      inHouseGuests: activeBookings.length,
+    },
+    collections: {
+      cash: bills.reduce((s, b) => s + b.payCash, 0) + orders.filter((o) => !o.bookingId).length * 0 + ledger.filter((e) => e.type === 'INCOME' && e.method === 'CASH' && e.category === 'ADVANCE').reduce((s, e) => s + e.amount, 0),
+      upi: bills.reduce((s, b) => s + b.payUpi, 0) + ledger.filter((e) => e.type === 'INCOME' && e.method === 'UPI' && e.category === 'ADVANCE').reduce((s, e) => s + e.amount, 0),
+      card: bills.reduce((s, b) => s + b.payCard, 0) + ledger.filter((e) => e.type === 'INCOME' && e.method === 'CARD' && e.category === 'ADVANCE').reduce((s, e) => s + e.amount, 0),
+      directFood: orders.filter((o) => !o.bookingId).reduce((s, o) => s + o.total, 0),
+      advances: ledger.filter((e) => e.type === 'INCOME' && e.category === 'ADVANCE').reduce((s, e) => s + e.amount, 0),
+      total: bills.reduce((s, b) => s + b.payCash + b.payUpi + b.payCard, 0) + orders.filter((o) => !o.bookingId).reduce((s, o) => s + o.total, 0) + ledger.filter((e) => e.type === 'INCOME' && e.category === 'ADVANCE').reduce((s, e) => s + e.amount, 0),
+    },
+    revenue: {
+      actualRoomRevenue: bills.reduce((s, b) => s + b.actualRoomTotal, 0),
+      billedRoomRevenue: bills.reduce((s, b) => s + b.billedRoomTotal, 0),
+      gst: bills.reduce((s, b) => s + b.actualGst, 0),
+      foodRoomPosted: bills.reduce((s, b) => s + b.foodTotal, 0),
+      foodDirect: orders.filter((o) => !o.bookingId).reduce((s, o) => s + o.total, 0),
+      discounts: bills.reduce((s, b) => s + b.discount, 0),
+      grandTotal: bills.reduce((s, b) => s + b.grandTotal, 0),
+    },
+    invoices: {
+      count: bills.length,
+      customCount: customBills.length,
+      rows: bills.map((b) => ({
+        billNumber: b.billNumber,
+        date: b.createdAt,
+        guestName: b.booking.guest.name,
+        roomNumber: b.booking.room.number,
+        actualRoomTotal: b.actualRoomTotal,
+        billedRoomTotal: b.billedRoomTotal,
+        foodTotal: b.foodTotal,
+        gst: b.actualGst,
+        grandTotal: b.grandTotal,
+        isCustom: b.billedRoomTotal !== b.actualRoomTotal,
+        approvedBy: b.approvedBy,
+      })),
+    },
+    food: {
+      ordersCount: orders.length,
+      roomPostedCount: orders.filter((o) => o.bookingId).length,
+      rows: orders.map((o) => ({
+        id: o.id,
+        time: o.createdAt,
+        roomNumber: o.room?.number || null,
+        tableNo: o.tableNo,
+        items: o.items.map((i) => `${i.name} x${i.quantity}`).join(', '),
+        total: o.total,
+        createdBy: o.createdBy,
+        postedToRoom: !!o.bookingId,
+      })),
+    },
+    staff: {
+      salaryTotal: staffPays.filter((p) => p.type === 'SALARY').reduce((s, p) => s + p.amount, 0),
+      advanceTotal: staffPays.filter((p) => p.type === 'ADVANCE').reduce((s, p) => s + p.amount, 0),
+      rows: staffPays.map((p) => ({
+        staffName: p.staff.name,
+        type: p.type,
+        amount: p.amount,
+        method: p.method,
+        date: p.date,
+        recoveryNotes: p.recoveryNotes,
+      })),
+    },
+    expenses: {
+      total: ledger.filter((e) => e.type === 'EXPENSE').reduce((s, e) => s + e.amount, 0),
+      byCategory: expenseByCategory,
+      rows: ledger.filter((e) => e.type === 'EXPENSE').map((e) => ({
+        date: e.date,
+        category: e.category,
+        description: e.description,
+        amount: e.amount,
+        method: e.method,
+        vendor: e.vendor,
+      })),
+    },
+    outstanding: {
+      total: outstandingRows.reduce((s, r) => s + r.balance, 0),
+      rows: outstandingRows,
+    },
+    bookings: {
+      rows: bookings.map((b) => ({
+        guestName: b.guest.name,
+        phone: b.guest.phone,
+        roomNumber: b.room.number,
+        checkIn: b.checkIn,
+        checkOut: b.checkOut,
+        days: b.days,
+        ratePerDay: b.ratePerDay,
+        status: b.status,
+        paymentStatus: b.paymentStatus,
+        isCorporate: b.isCorporate,
+      })),
+    },
+  })
+}
+
+// ============ ROUTER ============
+async function route(
+  req: NextRequest,
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+): Promise<NextResponse> {
+  const session: DbSession = await acquireDb()
+  DB = session.client
+  persistFn = session.persist
+  const url = new URL(req.url)
+  const segments = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean)
+  const resource = segments[0] || ''
+  let body: Record<string, unknown> = {}
+  if (method === 'POST' || method === 'PATCH') {
+    try {
+      body = await req.json()
+    } catch {
+      body = {}
+    }
+  }
+
+  try {
+    const result = await dispatch(req, method, url, body)
+    if (method !== 'GET') {
+      await persistFn()
+    }
+    return result
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Internal server error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
+
+async function dispatch(
+  req: NextRequest,
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  url: URL,
+  body: Record<string, unknown>
+): Promise<NextResponse> {
+  const segments = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean)
+  const resource = segments[0] || ''
+  const user = getRequestUser(req)
+  switch (resource) {
+    case 'rooms':
+      if (method === 'GET') return await listRooms(req)
+      if (method === 'POST') return await createRoom(body)
+      if (method === 'PATCH') return await updateRoom(body)
+      break
+    case 'guests':
+      if (method === 'GET' && url.searchParams.get('phone')) return await lookupGuest(req)
+      if (method === 'GET') return await listGuests(req)
+      if (method === 'POST') return await upsertGuest(body)
+      break
+    case 'bookings':
+      if (method === 'GET') return await listBookings(req)
+      if (method === 'POST') return await createBooking(body, user)
+      if (method === 'PATCH') return await updateBooking(body, user)
+      break
+    case 'bills':
+      if (method === 'GET') return await listBills(req)
+      if (method === 'POST' && body.action === 'payment') return await addBillPayment(body, user)
+      if (method === 'POST') return await createBill(body, user)
+      break
+    case 'menu':
+      if (method === 'GET') return await listMenu()
+      if (method === 'POST') return await createMenuItem(body)
+      if (method === 'PATCH') return await updateMenuItem(body)
+      if (method === 'DELETE') return await deleteMenuItem(req)
+      break
+    case 'orders':
+      if (method === 'GET') return await listOrders(req)
+      if (method === 'POST') return await createOrder(body, user)
+      if (method === 'PATCH') return await updateOrder(body, user)
+      break
+    case 'staff':
+      if (method === 'GET') return await listStaff(req)
+      if (method === 'POST') return await createStaff(body)
+      if (method === 'PATCH') return await updateStaff(body)
+      break
+    case 'staff-payments':
+      if (method === 'GET') return await listStaffPayments(req)
+      if (method === 'POST') return await createStaffPayment(body, user)
+      break
+    case 'ledger':
+      if (method === 'GET') return await listLedger(req)
+      if (method === 'POST') return await createLedgerEntry(body, user)
+      break
+    case 'stats':
+      if (method === 'GET') return await getStats()
+      break
+    case 'settings':
+      if (method === 'GET') return await getSettings()
+      if (method === 'PATCH') return await updateSettings(body, user)
+      break
+    case 'users':
+      if (method === 'GET') return await listUsers()
+      if (method === 'POST') return await createUser(body, user)
+      if (method === 'PATCH') return await updateUser(body, user)
+      break
+    case 'auth':
+      if (method === 'POST') return await login(body)
+      break
+    case 'audit':
+      if (method === 'GET') return await listAudit(req)
+      break
+    case 'expense-categories':
+      if (method === 'GET') return await listExpenseCategories()
+      if (method === 'POST') return await createExpenseCategory(body)
+      if (method === 'PATCH') return await updateExpenseCategory(body)
+      if (method === 'DELETE') return await deleteExpenseCategory(req)
+      break
+    case 'search':
+      if (method === 'GET') return await globalSearch(req)
+      break
+    case 'reports':
+      if (method === 'GET') return await getReports(req)
+      break
+  }
+  return NextResponse.json({ error: `Not found: ${method} /api/${resource}` }, { status: 404 })
+}
+
+export async function GET(req: NextRequest) {
+  return route(req, 'GET')
+}
+export async function POST(req: NextRequest) {
+  return route(req, 'POST')
+}
+export async function PATCH(req: NextRequest) {
+  return route(req, 'PATCH')
+}
+export async function DELETE(req: NextRequest) {
+  return route(req, 'DELETE')
+}
