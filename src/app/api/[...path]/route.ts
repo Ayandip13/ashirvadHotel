@@ -1365,8 +1365,13 @@ async function getReports(req: NextRequest) {
   const defFrom = new Date(today.getFullYear(), today.getMonth(), 1)
   const fromStr = searchParams.get('from') || defFrom.toISOString().slice(0, 10)
   const toStr = searchParams.get('to') || today.toISOString().slice(0, 10)
-  const start = new Date(fromStr + 'T00:00:00')
-  const end = new Date(toStr + 'T23:59:59.999')
+  const startLocal = new Date(fromStr + 'T00:00:00')
+  const startUtc = new Date(`${fromStr}T00:00:00.000Z`)
+  const start = isNaN(startLocal.getTime()) ? startUtc : (startLocal < startUtc ? startLocal : startUtc)
+
+  const endLocal = new Date(toStr + 'T23:59:59.999')
+  const endUtc = new Date(`${toStr}T23:59:59.999Z`)
+  const end = isNaN(endLocal.getTime()) ? endUtc : (endLocal > endUtc ? endLocal : endUtc)
 
   const [bills, orders, ledger, bookings, staffPays, rooms, activeBookings] = await Promise.all([
     DB.bill.findMany({

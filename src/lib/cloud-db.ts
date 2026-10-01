@@ -114,7 +114,7 @@ async function downloadTo(version: string): Promise<{ file: string; client: Pris
   }
   const reader = result.stream.getReader()
   const chunks: Uint8Array[] = []
-  for (;;) {
+  for (; ;) {
     const { done, value } = await reader.read()
     if (done) break
     if (value) chunks.push(value)
@@ -146,7 +146,7 @@ export async function acquireDb(): Promise<DbSession> {
       }
       return {
         client: globalState.hotelLocalClient,
-        persist: async () => {},
+        persist: async () => { },
       }
     }
 
