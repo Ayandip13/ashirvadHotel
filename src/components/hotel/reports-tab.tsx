@@ -117,6 +117,33 @@ interface TabProps {
   initialFilter?: string
 }
 
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  sub,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  value: string
+  sub?: string
+}) {
+  return (
+    <Card>
+      <CardContent className="flex items-center gap-3 p-4">
+        <div className="rounded-full bg-muted p-2.5">
+          <Icon className="h-5 w-5 text-emerald-700 dark:text-emerald-400" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs text-muted-foreground">{label}</p>
+          <p className="truncate text-lg font-bold">{value}</p>
+          {sub && <p className="text-[10px] text-muted-foreground">{sub}</p>}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function ReportsTab({ refreshKey }: TabProps) {
   const [data, setData] = useState<ReportData | null>(null)
   const [loading, setLoading] = useState(true)
@@ -141,33 +168,6 @@ export function ReportsTab({ refreshKey }: TabProps) {
   useEffect(() => {
     load()
   }, [load, refreshKey])
-
-  function StatCard({
-    icon: Icon,
-    label,
-    value,
-    sub,
-  }: {
-    icon: React.ComponentType<{ className?: string }>
-    label: string
-    value: string
-    sub?: string
-  }) {
-    return (
-      <Card>
-        <CardContent className="flex items-center gap-3 p-4">
-          <div className="rounded-full bg-muted p-2.5">
-            <Icon className="h-5 w-5 text-emerald-700 dark:text-emerald-400" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-xs text-muted-foreground">{label}</p>
-            <p className="truncate text-lg font-bold">{value}</p>
-            {sub && <p className="text-[10px] text-muted-foreground">{sub}</p>}
-          </div>
-        </CardContent>
-      </Card>
-    )
-  }
 
   if (loading && !data) {
     return (

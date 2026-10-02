@@ -3,11 +3,12 @@ import { PrismaClient } from '@prisma/client'
 const prisma = new PrismaClient()
 
 async function main() {
-  // Seed 30 rooms only if empty
+  console.log('🌱 Starting database seeding...')
+
+  // 1. Seed 30 rooms (Floors 1-3)
   const roomCount = await prisma.room.count()
   if (roomCount === 0) {
     const roomData: { number: string; type: string; capacity: number; rate: number }[] = []
-    // Floors 1-3, rooms 101-110, 201-210, 301-310
     for (let floor = 1; floor <= 3; floor++) {
       for (let i = 1; i <= 10; i++) {
         const num = `${floor}${String(i).padStart(2, '0')}`
@@ -27,10 +28,12 @@ async function main() {
       }
     }
     await prisma.room.createMany({ data: roomData })
-    console.log(`Seeded ${roomData.length} rooms`)
+    console.log(`✓ Seeded ${roomData.length} rooms`)
+  } else {
+    console.log(`ℹ Rooms already exist (${roomCount} found)`)
   }
 
-  // Seed menu items only if empty
+  // 2. Seed menu items
   const menuCount = await prisma.menuItem.count()
   if (menuCount === 0) {
     const menu = [
@@ -58,10 +61,12 @@ async function main() {
       { name: 'Mineral Water (1L)', category: 'Beverages', price: 20 },
     ]
     await prisma.menuItem.createMany({ data: menu })
-    console.log(`Seeded ${menu.length} menu items`)
+    console.log(`✓ Seeded ${menu.length} menu items`)
+  } else {
+    console.log(`ℹ Menu items already exist (${menuCount} found)`)
   }
 
-  // Seed staff only if empty
+  // 3. Seed staff
   const staffCount = await prisma.staff.count()
   if (staffCount === 0) {
     await prisma.staff.createMany({
@@ -74,10 +79,12 @@ async function main() {
         { name: 'Bikram Singh', role: 'Guard', salary: 8000 },
       ],
     })
-    console.log('Seeded 6 staff members')
+    console.log('✓ Seeded staff members')
+  } else {
+    console.log(`ℹ Staff already exist (${staffCount} found)`)
   }
 
-  // Seed a couple of guests for demo auto-fill (only if empty)
+  // 4. Seed demo guests
   const guestCount = await prisma.guest.count()
   if (guestCount === 0) {
     await prisma.guest.createMany({
@@ -86,61 +93,79 @@ async function main() {
         { phone: '9123456781', name: 'Priya Sen', company: 'Sen Enterprises', gst: '19AACFS8291K1Z2' },
       ],
     })
-    console.log('Seeded demo guests')
+    console.log('✓ Seeded demo guests')
+  } else {
+    console.log(`ℹ Guests already exist (${guestCount} found)`)
   }
 
-  // Seed app users (role-based permissions) only if empty
-  const userCount = await prisma.user.count()
-  if (userCount === 0) {
-    await prisma.user.createMany({
-      data: [
-        { name: 'Admin', role: 'ADMIN', pin: '1111' },
-        { name: 'Manager', role: 'MANAGER', pin: '2222' },
-        { name: 'Reception', role: 'RECEPTION', pin: '3333' },
-      ],
+  // 5. Seed app users (PINs for Admin, Manager, Reception)
+  const users = [
+    { name: 'Admin', role: 'ADMIN', pin: '1111' },
+    { name: 'Manager', role: 'MANAGER', pin: '2222' },
+    { name: 'Reception', role: 'RECEPTION', pin: '3333' },
+  ]
+  for (const u of users) {
+    await prisma.user.upsert({
+      where: { name: u.name },
+      update: { role: u.role, pin: u.pin, active: true },
+      create: { name: u.name, role: u.role, pin: u.pin, active: true },
     })
-    console.log('Seeded 3 app users (Admin/1111, Manager/2222, Reception/3333)')
   }
+  console.log('✓ Seeded/verified app users (Admin: 1111, Manager: 2222, Reception: 3333)')
 
-  // Seed settings only if empty
-  const settingCount = await prisma.setting.count()
-  if (settingCount === 0) {
-    const settings = [
-      { key: 'hotelName', value: 'Grand Hotel' },
-      { key: 'hotelAddress', value: 'Station Road, Kolkata' },
-      { key: 'hotelPhone', value: '+91 90000 00000' },
-      { key: 'hotelGstin', value: '' },
-      { key: 'gstPercent', value: '12' },
-      { key: 'invoicePrefix', value: 'INV' },
-      { key: 'invoiceCounter', value: '1' },
-    ]
-    await prisma.setting.createMany({ data: settings })
-    console.log('Seeded settings')
-  }
-
-  // Seed expense categories only if empty
-  const catCount = await prisma.expenseCategory.count()
-  if (catCount === 0) {
-    await prisma.expenseCategory.createMany({
-      data: [
-        { name: 'Salary' },
-        { name: 'Staff Advance' },
-        { name: 'Groceries / Purchase' },
-        { name: 'Utilities (EB/Water)' },
-        { name: 'Repairs & Maintenance' },
-        { name: 'Housekeeping Supplies' },
-        { name: 'Transport' },
-        { name: 'Marketing' },
-        { name: 'Petty Cash' },
-        { name: 'Other' },
-      ],
+  // 6. Seed settings
+  const settings = [
+    { key: 'hotelName', value: 'Grand Hotel' },
+    { key: 'hotelAddress', value: 'Station Road, Kolkata' },
+    { key: 'hotelPhone', value: '+91 90000 00000' },
+    { key: 'hotelGstin', value: '' },
+    { key: 'restaurantName', value: 'Grand Restaurant' },
+    { key: 'restaurantAddress', value: 'Station Road, Kolkata' },
+    { key: 'restaurantPhone', value: '+91 90000 00000' },
+    { key: 'restaurantGstin', value: '' },
+    { key: 'gstPercent', value: '12' },
+    { key: 'invoicePrefix', value: 'INV' },
+    { key: 'invoiceCounter', value: '1' },
+  ]
+  for (const s of settings) {
+    await prisma.setting.upsert({
+      where: { key: s.key },
+      update: {},
+      create: s,
     })
-    console.log('Seeded 10 expense categories')
   }
+  console.log('✓ Seeded/verified default settings')
 
-  console.log('Seed complete!')
+  // 7. Seed expense categories
+  const categories = [
+    'Salary',
+    'Staff Advance',
+    'Groceries / Purchase',
+    'Utilities (EB/Water)',
+    'Repairs & Maintenance',
+    'Housekeeping Supplies',
+    'Transport',
+    'Marketing',
+    'Petty Cash',
+    'Other',
+  ]
+  for (const name of categories) {
+    await prisma.expenseCategory.upsert({
+      where: { name },
+      update: {},
+      create: { name, active: true },
+    })
+  }
+  console.log('✓ Seeded/verified 10 expense categories')
+
+  console.log('🎉 Seeding completed successfully!')
 }
 
 main()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect())
+  .catch((e) => {
+    console.error('Seeding error:', e)
+    process.exit(1)
+  })
+  .finally(async () => {
+    await prisma.$disconnect()
+  })
