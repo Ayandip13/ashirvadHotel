@@ -77,7 +77,20 @@ export function getDbUrl(): Promise<string> {
 // Initialize once at module load (before first query)
 const initPromise = getDbUrl()
 
-export const db = globalForPrisma.prisma ?? new PrismaClient()
+export const db =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    datasources: process.env.DATABASE_URL
+      ? undefined
+      : {
+          db: {
+            url:
+              process.env.VERCEL === '1' || process.env.VERCEL
+                ? `file:${RUNTIME_DB_PATH}`
+                : `file:${findBundledDb() || './db/custom.db'}`,
+          },
+        },
+  })
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
 

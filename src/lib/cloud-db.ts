@@ -130,6 +130,36 @@ async function downloadTo(version: string): Promise<{ file: string; client: Pris
   return { file, client }
 }
 
+function getLocalOrFallbackDbUrl(): string {
+  if (process.env.DATABASE_URL) {
+    return process.env.DATABASE_URL
+  }
+  if (process.env.VERCEL === '1' || process.env.VERCEL) {
+    const tmpPath = path.join(os.tmpdir(), `hotel-manager-${SCHEMA_VERSION}-fallback.db`)
+    if (!fs.existsSync(tmpPath) || fs.statSync(tmpPath).size === 0) {
+      const bundled = findBundledDb()
+      if (bundled) {
+        fs.copyFileSync(bundled, tmpPath)
+      } else {
+        fs.writeFileSync(tmpPath, '')
+      }
+    }
+    return `file:${tmpPath}`
+  }
+  const bundled = findBundledDb()
+  if (bundled) {
+    return `file:${bundled}`
+  }
+  return 'file:../db/custom.db'
+}
+
+function createLocalClient(): PrismaClient {
+  const url = getLocalOrFallbackDbUrl()
+  return new PrismaClient({
+    datasources: { db: { url } },
+  })
+}
+
 export interface DbSession {
   client: PrismaClient
   /** call after mutations to persist to cloud */
@@ -138,63 +168,68 @@ export interface DbSession {
 
 export async function acquireDb(): Promise<DbSession> {
   return withMutex(async () => {
-    // Local dev: plain shared client
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      if (!globalState.hotelLocalClient) {
-        globalState.hotelLocalClient = new PrismaClient()
-        await migrateDb(globalState.hotelLocalClient)
-      }
-      return {
-        client: globalState.hotelLocalClient,
-        persist: async () => { },
-      }
-    }
-
-    const version = await ensureBlobExists()
-    const cache = globalState.hotelCache
-    if (cache && cache.version === version) {
-      return {
-        client: cache.client,
-        persist: async () => {
-          await uploadFile(cache.file)
-        },
-      }
-    }
-
-    // Dispose stale cache
-    if (cache) {
+    // If BLOB_READ_WRITE_TOKEN is configured, attempt Vercel Blob sync
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
       try {
-        await cache.client.$disconnect()
-      } catch {
-        // ignore
-      }
-      try {
-        fs.unlinkSync(cache.file)
-      } catch {
-        // ignore
-      }
-    }
-
-    const { file, client } = await downloadTo(version)
-    // Upgrade an older shared DB in place (new tables/columns/seeds), then
-    // persist the migrated version so every other instance gets it too.
-    await migrateDb(client)
-    await uploadFile(file)
-    globalState.hotelCache = { version, file, client }
-    return {
-      client,
-      persist: async () => {
-        await uploadFile(file)
-        // Sync cache version so the next request reuses this exact file
-        try {
-          const meta = await head(DB_BLOB_PATH)
-          if (globalState.hotelCache && globalState.hotelCache.file === file) {
-            globalState.hotelCache.version = meta.etag || String(meta.uploadedAt)
+        const version = await ensureBlobExists()
+        const cache = globalState.hotelCache
+        if (cache && cache.version === version) {
+          return {
+            client: cache.client,
+            persist: async () => {
+              await uploadFile(cache.file)
+            },
           }
-        } catch {
-          // ignore — next request will re-download
         }
-      },
+
+        // Dispose stale cache
+        if (cache) {
+          try {
+            await cache.client.$disconnect()
+          } catch {
+            // ignore
+          }
+          try {
+            fs.unlinkSync(cache.file)
+          } catch {
+            // ignore
+          }
+        }
+
+        const { file, client } = await downloadTo(version)
+        // Upgrade an older shared DB in place (new tables/columns/seeds), then
+        // persist the migrated version so every other instance gets it too.
+        await migrateDb(client)
+        await uploadFile(file)
+        globalState.hotelCache = { version, file, client }
+        return {
+          client,
+          persist: async () => {
+            await uploadFile(file)
+            // Sync cache version so the next request reuses this exact file
+            try {
+              const meta = await head(DB_BLOB_PATH)
+              if (globalState.hotelCache && globalState.hotelCache.file === file) {
+                globalState.hotelCache.version = meta.etag || String(meta.uploadedAt)
+              }
+            } catch {
+              // ignore — next request will re-download
+            }
+          },
+        }
+      } catch (e) {
+        console.error('[cloud-db] Blob storage error, falling back to local runtime DB:', e)
+      }
+    }
+
+    // Local dev or fallback when Blob storage is unavailable / disabled
+    if (!globalState.hotelLocalClient) {
+      globalState.hotelLocalClient = createLocalClient()
+      await migrateDb(globalState.hotelLocalClient)
+    }
+    return {
+      client: globalState.hotelLocalClient,
+      persist: async () => { },
     }
   })
 }
