@@ -80,8 +80,6 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
 
   // New order state
   const [orderOpen, setOrderOpen] = useState(false)
-  const [orderType, setOrderType] = useState<'ROOM' | 'TABLE'>('ROOM')
-  const [selectedBookingId, setSelectedBookingId] = useState('')
   const [tableNo, setTableNo] = useState('')
   const [cart, setCart] = useState<Record<string, { name: string; price: number; quantity: number }>>({})
   const [saving, setSaving] = useState(false)
@@ -155,30 +153,22 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
       setError('Add at least one item')
       return
     }
-    if (orderType === 'ROOM' && !selectedBookingId) {
-      setError('Select a room')
-      return
-    }
-    if (orderType === 'TABLE' && !tableNo.trim()) {
+    if (!tableNo.trim()) {
       setError('Enter table number')
       return
     }
     setSaving(true)
     setError('')
     try {
-      const booking = bookings.find((b) => b.id === selectedBookingId)
       await apiAs('/api/orders', getCachedUser(), {
         method: 'POST',
         body: JSON.stringify({
-          bookingId: orderType === 'ROOM' ? selectedBookingId : undefined,
-          roomId: orderType === 'ROOM' ? booking?.room.id : undefined,
-          tableNo: orderType === 'TABLE' ? tableNo.trim() : undefined,
+          tableNo: tableNo.trim(),
           items,
         }),
       })
       setCart({})
       setTableNo('')
-      setSelectedBookingId('')
       setOrderOpen(false)
       await load()
       onDataChanged()
@@ -450,40 +440,21 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
         <DialogContent className="max-w-lg max-h-[92vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>New Food Order</DialogTitle>
-            <DialogDescription>Room service ya restaurant table order</DialogDescription>
+            <DialogDescription>Create a restaurant table order</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <Tabs value={orderType} onValueChange={(v) => setOrderType(v as 'ROOM' | 'TABLE')}>
-              <TabsList className="w-full grid grid-cols-2">
-                <TabsTrigger value="ROOM">
-                  <UtensilsCrossed className="mr-1.5 h-3.5 w-3.5" /> Room Service
-                </TabsTrigger>
-                <TabsTrigger value="TABLE">
-                  <Store className="mr-1.5 h-3.5 w-3.5" /> Table
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="ROOM" className="pt-2">
-                <Label>Select Room (In-House Guest)</Label>
-                <Select value={selectedBookingId} onValueChange={setSelectedBookingId}>
-                  <SelectTrigger className="mt-1.5">
-                    <SelectValue placeholder="Choose room" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {bookings.map((b) => (
-                      <SelectItem key={b.id} value={b.id}>
-                        Room {b.room?.number} — {b.guest?.name || 'Guest'}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-1.5 text-[11px] text-muted-foreground">Order will merge with the room bill at checkout</p>
-              </TabsContent>
-              <TabsContent value="TABLE" className="pt-2">
-                <Label>Table Number</Label>
-                <Input className="mt-1.5" placeholder="e.g. T1" value={tableNo} onChange={(e) => setTableNo(e.target.value)} />
-                <p className="mt-1.5 text-[11px] text-muted-foreground">Walk-in: collect payment directly</p>
-              </TabsContent>
-            </Tabs>
+            <div className="space-y-1.5">
+              <Label htmlFor="order-table-no" className="flex items-center gap-1.5 text-sm font-medium">
+                <Store className="h-4 w-4 text-emerald-600" /> Table Number
+              </Label>
+              <Input
+                id="order-table-no"
+                placeholder="e.g. 1, 2, T1..."
+                value={tableNo}
+                onChange={(e) => setTableNo(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">Enter restaurant table number</p>
+            </div>
 
             <div className="space-y-1">
               <Label>Items</Label>
