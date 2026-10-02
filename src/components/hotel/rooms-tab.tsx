@@ -139,12 +139,13 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
   }
 
   async function addRoom() {
-    if (!newNumber.trim()) return
+    const cleanNum = newNumber.replace(/\D/g, '').trim()
+    if (!cleanNum) return
     setBusy(true)
     try {
       await apiAs('/api/rooms', getCachedUser(), {
         method: 'POST',
-        body: JSON.stringify({ number: newNumber.trim(), type: newType, rate: newRate, capacity: newCapacity }),
+        body: JSON.stringify({ number: cleanNum, type: newType, rate: newRate, capacity: newCapacity }),
       })
       setAddOpen(false)
       setNewNumber('')
@@ -390,7 +391,15 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
           <div className="space-y-3">
             <div className="space-y-1.5">
               <Label htmlFor="add-num">Room Number</Label>
-              <Input id="add-num" placeholder="e.g. 401" value={newNumber} onChange={(e) => setNewNumber(e.target.value)} />
+              <Input
+                id="add-num"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                placeholder="e.g. 401"
+                value={newNumber}
+                onChange={(e) => setNewNumber(e.target.value.replace(/\D/g, ''))}
+              />
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">

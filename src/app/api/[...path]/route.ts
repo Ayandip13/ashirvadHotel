@@ -129,11 +129,13 @@ async function listRooms(req: NextRequest) {
 async function createRoom(body: Record<string, unknown>) {
   const { number, type, capacity, rate, notes } = body
   if (!number) return NextResponse.json({ error: 'Room number required' }, { status: 400 })
-  const exists = await prisma.room.findUnique({ where: { number: String(number) } })
-  if (exists) return NextResponse.json({ error: `Room ${number} already exists` }, { status: 400 })
+  const cleanNumber = String(number).replace(/\D/g, '').trim()
+  if (!cleanNumber) return NextResponse.json({ error: 'Room number must only contain digits' }, { status: 400 })
+  const exists = await prisma.room.findUnique({ where: { number: cleanNumber } })
+  if (exists) return NextResponse.json({ error: `Room ${cleanNumber} already exists` }, { status: 400 })
   const room = await prisma.room.create({
     data: {
-      number: String(number),
+      number: cleanNumber,
       type: type ? String(type) : 'Non-AC',
       capacity: parseInt(String(capacity)) || 2,
       rate: num(rate) || 800,
