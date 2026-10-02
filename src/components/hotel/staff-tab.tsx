@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { api, apiAs, formatINR, formatDate, exportCSV } from '@/lib/hotel-utils'
+import { api, apiAs, formatINR, formatDate, exportCSV, sanitizePhone } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
 import { Loader2, Plus, Phone, IndianRupee, UserRound, ArrowRightLeft, Search } from 'lucide-react'
 
@@ -90,12 +90,17 @@ export function StaffTab({ refreshKey, onDataChanged }: { refreshKey: number; on
       setError('Name required')
       return
     }
+    const cleanPhone = sanitizePhone(phone)
+    if (phone.trim() && cleanPhone.length !== 10) {
+      setError('Staff phone number must be a valid 10-digit mobile number')
+      return
+    }
     setAdding(true)
     setError('')
     try {
       await api('/api/staff', {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim(), phone, role, salary, joinDate, address }),
+        body: JSON.stringify({ name: name.trim(), phone: cleanPhone || undefined, role, salary, joinDate, address }),
       })
       setName('')
       setPhone('')
@@ -316,8 +321,15 @@ export function StaffTab({ refreshKey, onDataChanged }: { refreshKey: number; on
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
-                <Label>Phone</Label>
-                <Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
+                <Label>Phone (10 Digits)</Label>
+                <Input
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
+                  placeholder="10-digit mobile number"
+                  value={phone}
+                  onChange={(e) => setPhone(sanitizePhone(e.target.value))}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label>Role</Label>

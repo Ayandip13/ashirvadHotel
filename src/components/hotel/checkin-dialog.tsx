@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
-import { api, apiAs, addDays, formatINR } from '@/lib/hotel-utils'
+import { api, apiAs, addDays, formatINR, sanitizePhone } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
 import { Loader2, UserSearch } from 'lucide-react'
 
@@ -67,12 +67,13 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
 
   // AUTO-FILL: when phone matches an old customer, fetch their details
   async function lookupGuest(value: string) {
-    setPhone(value)
-    if (value.trim().length >= 4) {
+    const clean = sanitizePhone(value)
+    setPhone(clean)
+    if (clean.length >= 4) {
       setSearching(true)
       try {
         const guest = await api<{ name: string; company?: string; gst?: string; address?: string } | null>(
-          `/api/guests?phone=${encodeURIComponent(value.trim())}`
+          `/api/guests?phone=${encodeURIComponent(clean)}`
         )
         if (guest) {
           setName(guest.name)
@@ -93,8 +94,13 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
 
   async function submit() {
     if (!room) return
-    if (!phone.trim() || !name.trim()) {
-      setError('Phone number and guest name are required')
+    const cleanPhone = sanitizePhone(phone)
+    if (cleanPhone.length !== 10) {
+      setError('Phone number must be a valid 10-digit mobile number (e.g. 9876543210)')
+      return
+    }
+    if (!name.trim()) {
+      setError('Guest name is required')
       return
     }
     if (!checkOut || isNaN(new Date(checkOut + 'T11:00:00').getTime())) {
@@ -108,7 +114,7 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
         method: 'POST',
         body: JSON.stringify({
           roomId: room.id,
-          phone: phone.trim(),
+          phone: cleanPhone,
           name: name.trim(),
           company: company.trim() || undefined,
           gst: gst.trim() || undefined,
@@ -143,14 +149,15 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
         <div className="space-y-3.5">
           <div className="space-y-1.5">
             <Label htmlFor="phone" className="text-sm font-medium">
-              Phone Number *
+              Phone Number (10 Digits) *
             </Label>
             <div className="relative">
               <Input
                 id="phone"
                 type="tel"
                 inputMode="numeric"
-                placeholder="Enter phone number"
+                maxLength={10}
+                placeholder="10-digit mobile number"
                 value={phone}
                 onChange={(e) => lookupGuest(e.target.value)}
                 className="pr-10"
@@ -162,6 +169,16 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
                 <UserSearch className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-emerald-600" />
               )}
             </div>
+            {phone.length > 0 && phone.length < 10 && (
+              <p className="text-xs font-medium text-amber-600">
+                10 digits required ({phone.length}/10 entered)
+              </p>
+            )}
+            {phone.length === 10 && (
+              <p className="text-xs font-medium text-emerald-600">
+                ✓ Valid 10-digit mobile number
+              </p>
+            )}
             {autoFilled && (
               <p className="text-xs text-emerald-600 font-medium">
                 ✓ Old customer found — details auto-filled!

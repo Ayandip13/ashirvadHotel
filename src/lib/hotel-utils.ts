@@ -110,3 +110,15 @@ export function dateOnly(d: string | Date | null | undefined): string {
 export function sumBy<T>(arr: T[], fn: (item: T) => number): number {
   return arr.reduce((s, x) => s + (fn(x) || 0), 0)
 }
+
+/** Sanitize input string to digits only and max 10 digits */
+export function sanitizePhone(val: string): string {
+  return val.replace(/\D/g, '').slice(0, 10)
+}
+
+/** Validate whether string is a valid 10-digit mobile phone number */
+export function isValidPhone(val: string): boolean {
+  const digits = val.replace(/\D/g, '')
+  return digits.length === 10 && /^[6-9]\d{9}$/.test(digits)
+}
+

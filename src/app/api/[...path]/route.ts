@@ -193,11 +193,18 @@ async function upsertGuest(body: Record<string, unknown>) {
   if (!phone || !name) {
     return NextResponse.json({ error: 'Phone and name are required' }, { status: 400 })
   }
-  const existing = await DB.guest.findUnique({ where: { phone: String(phone) } })
+  const cleanPhone = String(phone).replace(/\D/g, '')
+  if (cleanPhone.length !== 10) {
+    return NextResponse.json(
+      { error: 'Invalid phone number. A valid 10-digit mobile number is required.' },
+      { status: 400 }
+    )
+  }
+  const existing = await DB.guest.findUnique({ where: { phone: cleanPhone } })
   let guest
   if (existing) {
     guest = await DB.guest.update({
-      where: { phone: String(phone) },
+      where: { phone: cleanPhone },
       data: {
         name: String(name),
         ...(company !== undefined && { company: String(company) }),
@@ -209,7 +216,7 @@ async function upsertGuest(body: Record<string, unknown>) {
   } else {
     guest = await DB.guest.create({
       data: {
-        phone: String(phone),
+        phone: cleanPhone,
         name: String(name),
         ...(company ? { company: String(company) } : {}),
         ...(gst ? { gst: String(gst) } : {}),
@@ -264,6 +271,13 @@ async function createBooking(body: Record<string, unknown>, user: RequestUser) {
   } = body
   if (!roomId || !phone || !name) {
     return NextResponse.json({ error: 'Room, phone and name are required' }, { status: 400 })
+  }
+  const cleanPhone = String(phone).replace(/\D/g, '')
+  if (cleanPhone.length !== 10) {
+    return NextResponse.json(
+      { error: 'Invalid phone number. A valid 10-digit mobile number is required.' },
+      { status: 400 }
+    )
   }
   const room = await DB.room.findUnique({ where: { id: String(roomId) } })
   if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
@@ -323,7 +337,7 @@ async function createBooking(body: Record<string, unknown>, user: RequestUser) {
   }
 
   const guest = await DB.guest.upsert({
-    where: { phone: String(phone) },
+    where: { phone: cleanPhone },
     update: {
       name: String(name),
       ...(company !== undefined && { company: String(company) }),
@@ -331,7 +345,7 @@ async function createBooking(body: Record<string, unknown>, user: RequestUser) {
       ...(address !== undefined && { address: String(address) }),
     },
     create: {
-      phone: String(phone),
+      phone: cleanPhone,
       name: String(name),
       ...(company ? { company: String(company) } : {}),
       ...(gst ? { gst: String(gst) } : {}),
@@ -919,10 +933,21 @@ async function listStaff(req: NextRequest) {
 async function createStaff(body: Record<string, unknown>) {
   const { name, phone, role, salary, joinDate, address, aadhaar } = body
   if (!name) return NextResponse.json({ error: 'Name required' }, { status: 400 })
+  let cleanPhone: string | null = null
+  if (phone) {
+    const digits = String(phone).replace(/\D/g, '')
+    if (digits.length !== 10) {
+      return NextResponse.json(
+        { error: 'Staff phone number must be a valid 10-digit mobile number.' },
+        { status: 400 }
+      )
+    }
+    cleanPhone = digits
+  }
   const staff = await DB.staff.create({
     data: {
       name: String(name),
-      phone: phone ? String(phone) : null,
+      phone: cleanPhone,
       role: role ? String(role) : 'Staff',
       salary: num(salary),
       joinDate: joinDate ? new Date(String(joinDate)) : new Date(),
@@ -935,11 +960,26 @@ async function createStaff(body: Record<string, unknown>) {
 
 async function updateStaff(body: Record<string, unknown>) {
   const { id, name, phone, role, salary, address, aadhaar, active } = body
+  let cleanPhone: string | null | undefined = undefined
+  if (phone !== undefined) {
+    if (phone) {
+      const digits = String(phone).replace(/\D/g, '')
+      if (digits.length !== 10) {
+        return NextResponse.json(
+          { error: 'Staff phone number must be a valid 10-digit mobile number.' },
+          { status: 400 }
+        )
+      }
+      cleanPhone = digits
+    } else {
+      cleanPhone = null
+    }
+  }
   const staff = await DB.staff.update({
     where: { id: String(id) },
     data: {
       ...(name !== undefined && { name: String(name) }),
-      ...(phone !== undefined && { phone: String(phone) }),
+      ...(cleanPhone !== undefined && { phone: cleanPhone }),
       ...(role !== undefined && { role: String(role) }),
       ...(salary !== undefined && { salary: num(salary) }),
       ...(address !== undefined && { address: String(address) }),
