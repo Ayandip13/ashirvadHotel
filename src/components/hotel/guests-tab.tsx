@@ -23,17 +23,26 @@ import { PaymentStatusBadge } from './status-badge'
 import { TableControls, SortableTh, useSort, usePagination } from './table-controls'
 import { api, apiAs, formatINR, formatDate, exportCSV } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, History, Pencil } from 'lucide-react'
+import { Loader2, History, Pencil, Trash2 } from 'lucide-react'
+
+interface Bill {
+  id: string
+  billNumber: string
+  grandTotal: number
+}
 
 interface Booking {
   id: string
   checkIn: string
   checkOut?: string | null
   days: number
+  guestCount?: number
   ratePerDay: number
+  advance: number
   status: string
   paymentStatus: string
-  room: { number: string }
+  room?: { number: string; type: string } | null
+  bills?: Bill[]
 }
 
 interface GuestRow {
@@ -113,6 +122,27 @@ export function GuestsTab({ refreshKey, initialFilter }: TabProps) {
     setEditAddress(g.address || '')
   }
 
+  async function deleteGuest(g: GuestRow) {
+    if (!confirm(`Are you sure you want to delete guest profile ${g.name} (${g.phone})?`)) return
+    setBusy(true)
+    try {
+      const res = await apiAs<{ success?: boolean; error?: string }>(
+        `/api/guests?id=${g.id}`,
+        getCachedUser(),
+        { method: 'DELETE' }
+      )
+      if (res && res.error) {
+        alert(res.error)
+      } else {
+        await load()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not delete guest')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function saveEdit() {
     if (!editGuest) return
     setBusy(true)
@@ -170,7 +200,7 @@ export function GuestsTab({ refreshKey, initialFilter }: TabProps) {
               <TableHead>Company</TableHead>
               <TableHead>GST</TableHead>
               <SortableTh label="Stays" sortKey="bookings" sort={sort} onToggle={toggle} className="text-center" />
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-center">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -195,8 +225,8 @@ export function GuestsTab({ refreshKey, initialFilter }: TabProps) {
                 <TableCell className="text-sm text-muted-foreground">{g.company || '—'}</TableCell>
                 <TableCell className="text-sm text-muted-foreground">{g.gst || '—'}</TableCell>
                 <TableCell className="text-center">{g.bookings.length}</TableCell>
-                <TableCell className="text-right">
-                  <div className="flex justify-end gap-1">
+                <TableCell className="text-center">
+                  <div className="flex justify-center gap-1">
                     <Button
                       size="sm"
                       variant="outline"
@@ -207,6 +237,14 @@ export function GuestsTab({ refreshKey, initialFilter }: TabProps) {
                     </Button>
                     <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={() => openEdit(g)}>
                       <Pencil className="h-3 w-3" /> Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                      onClick={() => deleteGuest(g)}
+                    >
+                      <Trash2 className="h-3 w-3" /> Delete
                     </Button>
                   </div>
                 </TableCell>
@@ -219,35 +257,85 @@ export function GuestsTab({ refreshKey, initialFilter }: TabProps) {
 
       {/* History dialog */}
       <Dialog open={!!viewGuest} onOpenChange={(o) => !o && setViewGuest(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{viewGuest?.name}</DialogTitle>
+            <DialogTitle className="flex items-center justify-between">
+              <span>{viewGuest?.name}</span>
+              {viewGuest?.bookings && viewGuest.bookings.length > 0 && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  Total Stays: <strong className="text-foreground">{viewGuest.bookings.length}</strong>
+                </span>
+              )}
+            </DialogTitle>
             <DialogDescription>
               {viewGuest?.phone}
               {viewGuest?.company ? ` · ${viewGuest.company}` : ''}
               {viewGuest?.gst ? ` · GST ${viewGuest.gst}` : ''}
+              {viewGuest?.address ? ` · ${viewGuest.address}` : ''}
             </DialogDescription>
           </DialogHeader>
-          <div className="max-h-72 space-y-2 overflow-y-auto">
-            {(viewGuest?.bookings.length || 0) === 0 && (
-              <p className="text-sm text-muted-foreground">No stays recorded yet.</p>
-            )}
-            {viewGuest?.bookings.map((b) => (
-              <div key={b.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
-                <div>
-                  <div className="font-medium">
-                    Room {b.room.number} · {b.days} night{b.days > 1 ? 's' : ''}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {formatDate(b.checkIn)} → {formatDate(b.checkOut)}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xs font-medium">{b.status}</div>
-                  <PaymentStatusBadge status={b.paymentStatus} />
-                </div>
+
+          <div className="max-h-96 space-y-2.5 overflow-y-auto pr-1">
+            {(viewGuest?.bookings.length || 0) === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                No past or active bookings recorded for this guest.
               </div>
-            ))}
+            ) : (
+              viewGuest?.bookings.map((b) => {
+                const latestBill = b.bills?.[0]
+                const statusCls =
+                  b.status === 'ACTIVE'
+                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                    : b.status === 'BOOKED'
+                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                      : b.status === 'CANCELLED'
+                        ? 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                        : 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300'
+                return (
+                  <div key={b.id} className="rounded-xl border p-3 text-sm space-y-2 bg-card shadow-xs">
+                    <div className="flex items-center justify-between">
+                      <div className="font-bold text-base flex items-center gap-2">
+                        <span>Room {b.room?.number || '—'}</span>
+                        {b.room?.type && (
+                          <span className="text-xs font-normal text-muted-foreground">({b.room.type})</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusCls}`}>
+                          {b.status}
+                        </span>
+                        <PaymentStatusBadge status={b.paymentStatus} />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground pt-1 border-t">
+                      <div>
+                        <span className="font-medium text-foreground">Duration:</span> {b.days} night{b.days > 1 ? 's' : ''} ({b.guestCount || 1} guest{(b.guestCount || 1) > 1 ? 's' : ''})
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Rate:</span> {formatINR(b.ratePerDay)}/night
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Check-In:</span> {formatDate(b.checkIn)}
+                      </div>
+                      <div>
+                        <span className="font-medium text-foreground">Check-Out:</span> {formatDate(b.checkOut)}
+                      </div>
+                      {b.advance > 0 && (
+                        <div>
+                          <span className="font-medium text-emerald-600">Advance:</span> {formatINR(b.advance)}
+                        </div>
+                      )}
+                      {latestBill && (
+                        <div>
+                          <span className="font-medium text-foreground">Bill Total:</span> {formatINR(latestBill.grandTotal)} ({latestBill.billNumber})
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })
+            )}
           </div>
         </DialogContent>
       </Dialog>

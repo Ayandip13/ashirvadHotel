@@ -211,7 +211,15 @@ async function listGuests(req: NextRequest) {
       : undefined,
     orderBy: { createdAt: 'desc' },
     take: 500,
-    include: { bookings: { orderBy: { createdAt: 'desc' } } },
+    include: {
+      bookings: {
+        orderBy: { createdAt: 'desc' },
+        include: {
+          room: true,
+          bills: { orderBy: { createdAt: 'desc' }, take: 1 },
+        },
+      },
+    },
   })
   return NextResponse.json(guests)
 }
@@ -257,6 +265,32 @@ async function upsertGuest(body: Record<string, unknown>) {
     },
   })
   return NextResponse.json(guest)
+}
+
+async function deleteGuest(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Guest id is required' }, { status: 400 })
+
+  const guest = await prisma.guest.findUnique({
+    where: { id },
+    include: { bookings: { where: { status: 'ACTIVE' } } },
+  })
+
+  if (!guest) return NextResponse.json({ error: 'Guest not found' }, { status: 404 })
+
+  if (guest.bookings.length > 0) {
+    return NextResponse.json({ error: `Cannot delete guest ${guest.name}: guest currently has an active stay/booking` }, { status: 400 })
+  }
+
+  const totalBookings = await prisma.booking.count({ where: { guestId: id } })
+  if (totalBookings > 0) {
+    return NextResponse.json({ error: `Cannot delete guest ${guest.name}: guest has ${totalBookings} past booking record(s)` }, { status: 400 })
+  }
+
+  await prisma.guest.delete({ where: { id } })
+  await logAudit('DELETE_GUEST', 'Guest', id, `Deleted guest profile ${guest.name} (${guest.phone})`, user)
+  return NextResponse.json({ success: true, message: `Guest ${guest.name} deleted successfully` })
 }
 
 // ============ BOOKINGS ============
@@ -1046,6 +1080,92 @@ async function updateStaff(body: Record<string, unknown>) {
   return NextResponse.json(staff)
 }
 
+async function deleteStaff(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Staff id required' }, { status: 400 })
+
+  const staffMember = await prisma.staff.findUnique({ where: { id } })
+  if (!staffMember) return NextResponse.json({ error: 'Staff member not found' }, { status: 404 })
+
+  await prisma.staff.delete({ where: { id } })
+  await logAudit('DELETE_STAFF', 'Staff', id, `Deleted staff member ${staffMember.name} (${staffMember.role})`, user)
+  return NextResponse.json({ success: true, message: `Staff member ${staffMember.name} deleted successfully` })
+}
+
+async function deleteBooking(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Booking id required' }, { status: 400 })
+
+  const booking = await prisma.booking.findUnique({
+    where: { id },
+    include: { room: true, guest: true },
+  })
+
+  if (!booking) return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
+
+  if (booking.status === 'ACTIVE') {
+    return NextResponse.json({ error: `Cannot delete active booking for Room ${booking.room.number}. Please checkout or cancel first.` }, { status: 400 })
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.foodOrder.deleteMany({ where: { bookingId: id } })
+    await tx.bill.deleteMany({ where: { bookingId: id } })
+    await tx.booking.delete({ where: { id } })
+  })
+
+  await logAudit('DELETE_BOOKING', 'Booking', id, `Deleted booking record for Room ${booking.room.number} (${booking.guest.name})`, user)
+  return NextResponse.json({ success: true, message: 'Booking deleted successfully' })
+}
+
+async function deleteBill(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Bill id required' }, { status: 400 })
+
+  const bill = await prisma.bill.findUnique({
+    where: { id },
+    include: { booking: { include: { guest: true, room: true } } },
+  })
+
+  if (!bill) return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+
+  await prisma.bill.delete({ where: { id } })
+  await logAudit('DELETE_BILL', 'Bill', id, `Deleted bill ${bill.billNumber} for Room ${bill.booking.room.number} (${bill.booking.guest.name})`, user)
+  return NextResponse.json({ success: true, message: `Bill ${bill.billNumber} deleted successfully` })
+}
+
+async function deleteFoodOrder(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Order id required' }, { status: 400 })
+
+  const order = await prisma.foodOrder.findUnique({ where: { id } })
+  if (!order) return NextResponse.json({ error: 'Order not found' }, { status: 404 })
+
+  await prisma.foodOrder.delete({ where: { id } })
+  await logAudit('DELETE_ORDER', 'FoodOrder', id, `Deleted food order ₹${order.total}`, user)
+  return NextResponse.json({ success: true, message: 'Food order deleted successfully' })
+}
+
+async function deleteStaffPayment(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Payment id required' }, { status: 400 })
+
+  const payment = await prisma.staffPayment.findUnique({
+    where: { id },
+    include: { staff: true },
+  })
+
+  if (!payment) return NextResponse.json({ error: 'Payment record not found' }, { status: 404 })
+
+  await prisma.staffPayment.delete({ where: { id } })
+  await logAudit('DELETE_STAFF_PAYMENT', 'StaffPayment', id, `Deleted staff payment ${payment.type} ₹${payment.amount} for ${payment.staff.name}`, user)
+  return NextResponse.json({ success: true, message: 'Staff payment deleted successfully' })
+}
+
 // ============ STAFF PAYMENTS ============
 async function listStaffPayments(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -1190,6 +1310,41 @@ async function createLedgerEntry(body: Record<string, unknown>, user: RequestUse
   })
   await logAudit(type === 'INCOME' ? 'LEDGER_INCOME' : 'EXPENSE', 'LedgerEntry', entry.id, `${type} ₹${amount} — ${description}`, user)
   return NextResponse.json(entry)
+}
+
+async function updateLedgerEntry(body: Record<string, unknown>, user: RequestUser) {
+  const { id, category, description, amount, method, date, vendor } = body
+  if (!id) return NextResponse.json({ error: 'Entry id required' }, { status: 400 })
+
+  const existing = await prisma.ledgerEntry.findUnique({ where: { id: String(id) } })
+  if (!existing) return NextResponse.json({ error: 'Ledger entry not found' }, { status: 404 })
+
+  const updated = await prisma.ledgerEntry.update({
+    where: { id: String(id) },
+    data: {
+      ...(category !== undefined && { category: String(category) }),
+      ...(description !== undefined && { description: String(description) }),
+      ...(amount !== undefined && { amount: num(amount) }),
+      ...(method !== undefined && { method: String(method) }),
+      ...(vendor !== undefined && { vendor: vendor ? String(vendor) : null }),
+      ...(date !== undefined && { date: (parseDateInput(date, 'T12:00:00') as Date) || existing.date }),
+    },
+  })
+  await logAudit('EXPENSE_UPDATE', 'LedgerEntry', updated.id, `Updated expense entry ₹${updated.amount} — ${updated.description}`, user)
+  return NextResponse.json(updated)
+}
+
+async function deleteLedgerEntry(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Entry id required' }, { status: 400 })
+
+  const existing = await prisma.ledgerEntry.findUnique({ where: { id } })
+  if (!existing) return NextResponse.json({ error: 'Ledger entry not found' }, { status: 404 })
+
+  await prisma.ledgerEntry.delete({ where: { id } })
+  await logAudit('DELETE_EXPENSE', 'LedgerEntry', id, `Deleted expense entry ₹${existing.amount} — ${existing.description}`, user)
+  return NextResponse.json({ success: true, message: 'Expense entry deleted successfully' })
 }
 
 // ============ STATS ============
@@ -1389,6 +1544,19 @@ async function listAudit(req: NextRequest) {
   return NextResponse.json(logs)
 }
 
+async function deleteAudit(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Audit log ID required' }, { status: 400 })
+
+  const existing = await prisma.auditLog.findUnique({ where: { id } })
+  if (!existing) return NextResponse.json({ error: 'Audit log entry not found' }, { status: 404 })
+
+  await prisma.auditLog.delete({ where: { id } })
+  await logAudit('AUDIT_DELETE', 'AuditLog', id, `Audit log entry deleted: ${existing.action} - ${existing.details}`, user)
+  return NextResponse.json({ success: true })
+}
+
 // ============ EXPENSE CATEGORIES ============
 async function listExpenseCategories() {
   const cats = await prisma.expenseCategory.findMany({ orderBy: { name: 'asc' } })
@@ -1519,6 +1687,7 @@ async function getReports(req: NextRequest) {
   })
   const outstandingRows = outstandingBookings
     .map((b) => ({
+      id: b.id,
       billNumber: b.billNumber,
       bookingId: b.bookingId,
       guestName: b.booking.guest.name,
@@ -1571,6 +1740,7 @@ async function getReports(req: NextRequest) {
       count: bills.length,
       customCount: customBills.length,
       rows: bills.map((b) => ({
+        id: b.id,
         billNumber: b.billNumber,
         date: b.createdAt,
         guestName: b.booking.guest.name,
@@ -1602,6 +1772,7 @@ async function getReports(req: NextRequest) {
       salaryTotal: staffPays.filter((p) => p.type === 'SALARY').reduce((s, p) => s + p.amount, 0),
       advanceTotal: staffPays.filter((p) => p.type === 'ADVANCE').reduce((s, p) => s + p.amount, 0),
       rows: staffPays.map((p) => ({
+        id: p.id,
         staffName: p.staff.name,
         type: p.type,
         amount: p.amount,
@@ -1614,6 +1785,7 @@ async function getReports(req: NextRequest) {
       total: ledger.filter((e) => e.type === 'EXPENSE').reduce((s, e) => s + e.amount, 0),
       byCategory: expenseByCategory,
       rows: ledger.filter((e) => e.type === 'EXPENSE').map((e) => ({
+        id: e.id,
         date: e.date,
         category: e.category,
         description: e.description,
@@ -1628,6 +1800,7 @@ async function getReports(req: NextRequest) {
     },
     bookings: {
       rows: bookings.map((b) => ({
+        id: b.id,
         guestName: b.guest.name,
         phone: b.guest.phone,
         roomNumber: b.room.number,
@@ -1688,16 +1861,19 @@ async function dispatch(
       if (method === 'GET' && url.searchParams.get('phone')) return await lookupGuest(req)
       if (method === 'GET') return await listGuests(req)
       if (method === 'POST') return await upsertGuest(body)
+      if (method === 'DELETE') return await deleteGuest(req, user)
       break
     case 'bookings':
       if (method === 'GET') return await listBookings(req)
       if (method === 'POST') return await createBooking(body, user)
       if (method === 'PATCH') return await updateBooking(body, user)
+      if (method === 'DELETE') return await deleteBooking(req, user)
       break
     case 'bills':
       if (method === 'GET') return await listBills(req)
       if (method === 'POST' && body.action === 'payment') return await addBillPayment(body, user)
       if (method === 'POST') return await createBill(body, user)
+      if (method === 'DELETE') return await deleteBill(req, user)
       break
     case 'menu':
       if (method === 'GET') return await listMenu()
@@ -1709,19 +1885,24 @@ async function dispatch(
       if (method === 'GET') return await listOrders(req)
       if (method === 'POST') return await createOrder(body, user)
       if (method === 'PATCH') return await updateOrder(body, user)
+      if (method === 'DELETE') return await deleteFoodOrder(req, user)
       break
     case 'staff':
       if (method === 'GET') return await listStaff(req)
       if (method === 'POST') return await createStaff(body)
       if (method === 'PATCH') return await updateStaff(body)
+      if (method === 'DELETE') return await deleteStaff(req, user)
       break
     case 'staff-payments':
       if (method === 'GET') return await listStaffPayments(req)
       if (method === 'POST') return await createStaffPayment(body, user)
+      if (method === 'DELETE') return await deleteStaffPayment(req, user)
       break
     case 'ledger':
       if (method === 'GET') return await listLedger(req)
       if (method === 'POST') return await createLedgerEntry(body, user)
+      if (method === 'PATCH') return await updateLedgerEntry(body, user)
+      if (method === 'DELETE') return await deleteLedgerEntry(req, user)
       break
     case 'stats':
       if (method === 'GET') return await getStats()
@@ -1740,6 +1921,7 @@ async function dispatch(
       break
     case 'audit':
       if (method === 'GET') return await listAudit(req)
+      if (method === 'DELETE') return await deleteAudit(req, user)
       break
     case 'expense-categories':
       if (method === 'GET') return await listExpenseCategories()

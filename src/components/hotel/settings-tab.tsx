@@ -37,6 +37,7 @@ import {
   Sun,
   Plus,
   UtensilsCrossed,
+  Trash2,
 } from 'lucide-react'
 
 interface AppUserRow {
@@ -145,6 +146,24 @@ export function SettingsTab({ refreshKey }: TabProps) {
       ['Time', 'Action', 'Entity', 'Details', 'User', 'Role'],
       audit.map((a) => [formatDateTime(a.createdAt), a.action, a.entity, a.details || '', a.userName || '', a.userRole || ''])
     )
+  }
+
+  async function deleteAuditEntry(id: string, actionLabel: string) {
+    if (!confirm(`Are you sure you want to delete this audit entry (${actionLabel})?`)) return
+    try {
+      const res = await apiAs<{ success?: boolean; error?: string }>(
+        `/api/audit?id=${id}`,
+        user,
+        { method: 'DELETE' }
+      )
+      if (res && res.error) {
+        alert(res.error)
+      } else {
+        await load()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not delete audit entry')
+    }
   }
 
   if (loading) {
@@ -413,12 +432,13 @@ export function SettingsTab({ refreshKey }: TabProps) {
                   <TableHead>Action</TableHead>
                   <TableHead>Details</TableHead>
                   <TableHead>User</TableHead>
+                  <TableHead className="text-center">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredAudit.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
                       No audit entries yet.
                     </TableCell>
                   </TableRow>
@@ -438,6 +458,16 @@ export function SettingsTab({ refreshKey }: TabProps) {
                     <TableCell className="whitespace-nowrap text-xs">
                       {a.userName || '—'}
                       {a.userRole ? ` (${a.userRole})` : ''}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 gap-1 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                        onClick={() => deleteAuditEntry(a.id, a.action)}
+                      >
+                        <Trash2 className="h-3 w-3" /> Delete
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}

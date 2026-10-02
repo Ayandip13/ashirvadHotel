@@ -16,7 +16,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, apiAs, formatINR, formatDate, exportCSV, sanitizePhone } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, Plus, Phone, IndianRupee, UserRound, ArrowRightLeft, Search } from 'lucide-react'
+import { Loader2, Plus, Phone, IndianRupee, UserRound, ArrowRightLeft, Search, Trash2 } from 'lucide-react'
 
 interface StaffPayment {
   id: string
@@ -113,6 +113,25 @@ export function StaffTab({ refreshKey, onDataChanged }: { refreshKey: number; on
       setError(e instanceof Error ? e.message : 'Failed')
     } finally {
       setAdding(false)
+    }
+  }
+
+  async function deleteStaffMember(member: Staff) {
+    if (!confirm(`Are you sure you want to delete staff member "${member.name}" (${member.role})?`)) return
+    try {
+      const res = await apiAs<{ success?: boolean; error?: string }>(
+        `/api/staff?id=${member.id}`,
+        getCachedUser(),
+        { method: 'DELETE' }
+      )
+      if (res && res.error) {
+        alert(res.error)
+      } else {
+        setStaff((prev) => prev.filter((s) => s.id !== member.id))
+        onDataChanged()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not delete staff member')
     }
   }
 
@@ -285,22 +304,32 @@ export function StaffTab({ refreshKey, onDataChanged }: { refreshKey: number; on
                     )}
                   </div>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-xs"
-                  onClick={() => {
-                    setPayStaff(s)
-                    setPayType('SALARY')
-                    setPayAmount('')
-                    setPayMethod('CASH')
-                    setPayRecovery('')
-                    setPayNotes('')
-                    setPayError('')
-                  }}
-                >
-                  <ArrowRightLeft className="mr-1 h-3.5 w-3.5" /> Pay / Advance
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs"
+                    onClick={() => {
+                      setPayStaff(s)
+                      setPayType('SALARY')
+                      setPayAmount('')
+                      setPayMethod('CASH')
+                      setPayRecovery('')
+                      setPayNotes('')
+                      setPayError('')
+                    }}
+                  >
+                    <ArrowRightLeft className="mr-1 h-3.5 w-3.5" /> Pay / Advance
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                    onClick={() => deleteStaffMember(s)}
+                  >
+                    <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>

@@ -261,7 +261,7 @@ export function BookingsTab({ refreshKey, onDataChanged, initialFilter }: TabPro
               <TableHead>Advance</TableHead>
               <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggle} />
               <TableHead>Payment</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-center">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -312,8 +312,8 @@ export function BookingsTab({ refreshKey, onDataChanged, initialFilter }: TabPro
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex flex-wrap justify-end gap-1">
+                  <TableCell className="text-center">
+                    <div className="flex flex-wrap justify-center gap-1">
                       {b.status === 'BOOKED' && (
                         <Button
                           size="sm"

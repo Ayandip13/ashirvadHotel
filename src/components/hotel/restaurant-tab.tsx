@@ -191,21 +191,44 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
   }
 
   async function toggleAvailability(item: MenuItem) {
-    await api('/api/menu', { method: 'PATCH', body: JSON.stringify({ id: item.id, available: !item.available }) })
-    await load()
+    const nextAvailable = !item.available
+    setMenu((prev) =>
+      prev.map((m) => (m.id === item.id ? { ...m, available: nextAvailable } : m))
+    )
+    try {
+      await api('/api/menu', { method: 'PATCH', body: JSON.stringify({ id: item.id, available: nextAvailable }) })
+    } catch (e) {
+      setMenu((prev) =>
+        prev.map((m) => (m.id === item.id ? { ...m, available: item.available } : m))
+      )
+      alert(e instanceof Error ? e.message : 'Failed to update availability')
+    }
   }
 
   async function addMenuItem() {
-    if (!newName.trim() || !newPrice) return
+    const trimmedName = newName.trim()
+    const parsedPrice = parseFloat(newPrice)
+
+    if (!trimmedName) {
+      alert('Please enter an item name.')
+      return
+    }
+    if (isNaN(parsedPrice) || parsedPrice <= 0) {
+      alert('Please enter a valid price greater than 0.')
+      return
+    }
+
     setAdding(true)
     try {
-      await api('/api/menu', {
+      const createdItem = await api<MenuItem>('/api/menu', {
         method: 'POST',
-        body: JSON.stringify({ name: newName.trim(), category: newCategory, price: newPrice }),
+        body: JSON.stringify({ name: trimmedName, category: newCategory, price: parsedPrice }),
       })
+      setMenu((prev) => [...prev, createdItem])
       setNewName('')
       setNewPrice('')
-      await load()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to add menu item')
     } finally {
       setAdding(false)
     }
@@ -213,8 +236,14 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
 
   async function deleteMenuItem(id: string) {
     if (!confirm('Delete this menu item?')) return
-    await api(`/api/menu?id=${id}`, { method: 'DELETE' })
-    await load()
+    const targetItem = menu.find((m) => m.id === id)
+    setMenu((prev) => prev.filter((m) => m.id !== id))
+    try {
+      await api(`/api/menu?id=${id}`, { method: 'DELETE' })
+    } catch (e) {
+      if (targetItem) setMenu((prev) => [...prev, targetItem])
+      alert(e instanceof Error ? e.message : 'Failed to delete item')
+    }
   }
 
   const pendingOrders = orders.filter((o) => o.status === 'PENDING')
@@ -385,10 +414,16 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
           <Card>
             <CardContent className="p-4 space-y-3">
               <p className="text-sm font-semibold">Add Menu Item</p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  addMenuItem()
+                }}
+                className="grid grid-cols-1 gap-2 sm:grid-cols-4"
+              >
                 <Input placeholder="Item name" value={newName} onChange={(e) => setNewName(e.target.value)} />
                 <Select value={newCategory} onValueChange={setNewCategory}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Category">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -400,10 +435,10 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
                   </SelectContent>
                 </Select>
                 <Input type="number" placeholder="Price ₹" value={newPrice} onChange={(e) => setNewPrice(e.target.value)} />
-                <Button onClick={addMenuItem} disabled={adding} className="bg-emerald-600 hover:bg-emerald-700">
+                <Button type="submit" disabled={adding} className="bg-emerald-600 hover:bg-emerald-700">
                   {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />} Add
                 </Button>
-              </div>
+              </form>
             </CardContent>
           </Card>
 

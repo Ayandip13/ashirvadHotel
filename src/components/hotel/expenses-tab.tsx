@@ -30,7 +30,7 @@ import {
 import { TableControls, SortableTh, useSort, usePagination } from './table-controls'
 import { api, apiAs, apiList, formatINR, formatDate, exportCSV, todayStr } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, Plus, Trash2, Tag, TrendingDown } from 'lucide-react'
+import { Loader2, Plus, Trash2, Tag, TrendingDown, Pencil } from 'lucide-react'
 
 interface ExpenseCategory {
   id: string
@@ -77,6 +77,17 @@ export function ExpensesTab({ refreshKey, onDataChanged }: TabProps) {
   const [eDate, setEDate] = useState(todayStr())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  // edit expense form
+  const [editEntry, setEditEntry] = useState<LedgerEntry | null>(null)
+  const [editCategory, setEditCategory] = useState('')
+  const [editAmount, setEditAmount] = useState('')
+  const [editDesc, setEditDesc] = useState('')
+  const [editMethod, setEditMethod] = useState('CASH')
+  const [editVendor, setEditVendor] = useState('')
+  const [editDate, setEditDate] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState('')
 
   const load = useCallback(async () => {
     try {
@@ -174,6 +185,67 @@ export function ExpensesTab({ refreshKey, onDataChanged }: TabProps) {
       setError(e instanceof Error ? e.message : 'Failed')
     } finally {
       setSaving(false)
+    }
+  }
+
+  function openEdit(entry: LedgerEntry) {
+    setEditEntry(entry)
+    setEditCategory(entry.category)
+    setEditAmount(String(entry.amount))
+    setEditDesc(entry.description)
+    setEditMethod(entry.method)
+    setEditVendor(entry.vendor || '')
+    setEditDate(new Date(entry.date).toISOString().slice(0, 10))
+    setEditError('')
+  }
+
+  async function saveEdit() {
+    if (!editEntry || !editAmount || !editDesc.trim()) {
+      setEditError('Description and amount required')
+      return
+    }
+    setEditSaving(true)
+    setEditError('')
+    try {
+      await apiAs('/api/ledger', getCachedUser(), {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: editEntry.id,
+          category: editCategory || 'OTHER',
+          description: editDesc.trim(),
+          amount: editAmount,
+          method: editMethod,
+          vendor: editVendor.trim() || undefined,
+          date: editDate,
+        }),
+      })
+      setEditEntry(null)
+      await load()
+      onDataChanged()
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : 'Failed to save changes')
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  async function deleteExpense(entry: LedgerEntry) {
+    if (!confirm(`Are you sure you want to delete expense "${entry.description}" (${formatINR(entry.amount)})?`)) return
+    try {
+      const res = await apiAs<{ success?: boolean; error?: string }>(
+        `/api/ledger?id=${entry.id}`,
+        getCachedUser(),
+        { method: 'DELETE' }
+      )
+      if (res && res.error) {
+        alert(res.error)
+      } else {
+        setEntries((prev) => prev.filter((e) => e.id !== entry.id))
+        await load()
+        onDataChanged()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not delete expense')
     }
   }
 
@@ -279,12 +351,13 @@ export function ExpensesTab({ refreshKey, onDataChanged }: TabProps) {
               <TableHead>Vendor / Staff</TableHead>
               <TableHead>Mode</TableHead>
               <TableHead className="text-right">Amount</TableHead>
+              <TableHead className="text-center">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {(paged as unknown as LedgerEntry[]).length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                   No expenses recorded.
                 </TableCell>
               </TableRow>
@@ -302,6 +375,26 @@ export function ExpensesTab({ refreshKey, onDataChanged }: TabProps) {
                 <TableCell className="text-xs">{e.method}</TableCell>
                 <TableCell className="text-right text-sm font-bold text-red-600 dark:text-red-400">
                   {formatINR(e.amount)}
+                </TableCell>
+                <TableCell className="text-center">
+                  <div className="flex justify-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-xs"
+                      onClick={() => openEdit(e)}
+                    >
+                      <Pencil className="h-3 w-3" /> Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+                      onClick={() => deleteExpense(e)}
+                    >
+                      <Trash2 className="h-3 w-3" /> Delete
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
@@ -420,6 +513,71 @@ export function ExpensesTab({ refreshKey, onDataChanged }: TabProps) {
                 </li>
               ))}
             </ul>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* Edit expense dialog */}
+      <Dialog open={!!editEntry} onOpenChange={(o) => !o && setEditEntry(null)}>
+        <DialogContent className="max-w-md max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Edit Expense</DialogTitle>
+            <DialogDescription>Modify operational expense details</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {editError && <div className="rounded-lg bg-red-50 p-2 text-xs text-red-600 dark:bg-red-950/50">{editError}</div>}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Date *</Label>
+                <Input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Category *</Label>
+                <Select value={editCategory} onValueChange={setEditCategory}>
+                  <SelectTrigger aria-label="Edit category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((c) => (
+                      <SelectItem key={c.id} value={c.name}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                    <SelectItem value="OTHER">OTHER</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Description *</Label>
+              <Input value={editDesc} onChange={(e) => setEditDesc(e.target.value)} placeholder="e.g. EB Bill, Groceries, Plumbing" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Amount (₹) *</Label>
+                <Input type="number" min="0" step="any" value={editAmount} onChange={(e) => setEditAmount(e.target.value)} placeholder="0" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Payment Mode</Label>
+                <Select value={editMethod} onValueChange={setEditMethod}>
+                  <SelectTrigger aria-label="Edit mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="CASH">CASH</SelectItem>
+                    <SelectItem value="UPI">UPI</SelectItem>
+                    <SelectItem value="CARD">CARD</SelectItem>
+                    <SelectItem value="BANK">BANK</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Vendor / Staff (Optional)</Label>
+              <Input value={editVendor} onChange={(e) => setEditVendor(e.target.value)} placeholder="e.g. Ramesh, CESC, Local Shop" />
+            </div>
+            <Button className="w-full bg-emerald-600 hover:bg-emerald-700" disabled={editSaving} onClick={saveEdit}>
+              {editSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save Changes'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
