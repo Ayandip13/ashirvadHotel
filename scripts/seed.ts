@@ -115,11 +115,11 @@ async function main() {
 
   // 6. Seed settings
   const settings = [
-    { key: 'hotelName', value: 'Grand Hotel' },
+    { key: 'hotelName', value: 'Ashirvad Lodge' },
     { key: 'hotelAddress', value: 'Station Road, Kolkata' },
     { key: 'hotelPhone', value: '+91 90000 00000' },
     { key: 'hotelGstin', value: '' },
-    { key: 'restaurantName', value: 'Grand Restaurant' },
+    { key: 'restaurantName', value: 'Ashirvad Restaurant' },
     { key: 'restaurantAddress', value: 'Station Road, Kolkata' },
     { key: 'restaurantPhone', value: '+91 90000 00000' },
     { key: 'restaurantGstin', value: '' },
@@ -130,7 +130,7 @@ async function main() {
   for (const s of settings) {
     await prisma.setting.upsert({
       where: { key: s.key },
-      update: {},
+      update: { value: s.value },
       create: s,
     })
   }

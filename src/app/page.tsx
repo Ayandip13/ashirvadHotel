@@ -81,7 +81,7 @@ function Shell() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [loginOpen, setLoginOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [hotelName, setHotelName] = useState('Hotel Manager')
+  const [hotelName, setHotelName] = useState('Ashirvad Lodge')
   const [navTarget, setNavTarget] = useState<NavTarget | null>(null)
 
   // Global data refresh signal: any module change triggers refresh of all tabs

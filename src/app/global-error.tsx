@@ -51,7 +51,7 @@ export default function GlobalError({
         >
           <div style={{ fontSize: 40, lineHeight: 1 }}>🏨</div>
           <h1 style={{ fontSize: 19, margin: '0.75rem 0 0.35rem', fontWeight: 700 }}>
-            Hotel Manager failed to start
+            Ashirvad Hotel failed to start
           </h1>
           <p style={{ fontSize: 14, margin: '0 0 1rem', color: '#b91c1c' }}>
             A quick refresh usually fixes this. Your saved data is safe.

@@ -191,10 +191,10 @@ async function main() {
   console.log('=== 12. SETTINGS ===')
   const settings = (await req('GET', '/api/settings')).data as Record<string, string>
   check('settings GST percent = 12', settings.gstPercent === '12')
-  const settingsSave = await req('PATCH', '/api/settings', { hotelName: 'Grand Hotel Test' }, H)
-  check('settings update works', settingsSave.status === 200 && (settingsSave.data as { hotelName: string }).hotelName === 'Grand Hotel Test')
+  const settingsSave = await req('PATCH', '/api/settings', { hotelName: 'Ashirvad Hotel Test' }, H)
+  check('settings update works', settingsSave.status === 200 && (settingsSave.data as { hotelName: string }).hotelName === 'Ashirvad Hotel Test')
   // restore
-  await req('PATCH', '/api/settings', { hotelName: 'Grand Hotel' }, H)
+  await req('PATCH', '/api/settings', { hotelName: 'Ashirvad Hotel' }, H)
 
   console.log(failures === 0 ? '\n✅ ALL TESTS PASSED' : `\n❌ ${failures} TEST(S) FAILED`)
   process.exit(failures === 0 ? 0 : 1)
