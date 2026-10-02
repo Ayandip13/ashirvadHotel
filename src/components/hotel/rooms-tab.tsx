@@ -23,7 +23,7 @@ import { RoomStatusBadge } from './status-badge'
 import { TableControls } from './table-controls'
 import { api, apiAs, formatINR, formatDate } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, Plus, BrushCleaning, Wrench, BedDouble, Printer, Wallet } from 'lucide-react'
+import { Loader2, Plus, BrushCleaning, Wrench, BedDouble, Printer, Wallet, Trash2 } from 'lucide-react'
 
 interface Guest {
   id: string
@@ -75,6 +75,8 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
   const [checkinRoom, setCheckinRoom] = useState<Room | null>(null)
   const [viewRoom, setViewRoom] = useState<Room | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleteRoomId, setDeleteRoomId] = useState('')
   const [newNumber, setNewNumber] = useState('')
   const [newType, setNewType] = useState('Non-AC')
   const [newRate, setNewRate] = useState('800')
@@ -138,6 +140,34 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
     }
   }
 
+  async function handleDeleteRoom(roomId: string, roomNum?: string) {
+    if (!roomId) return
+    const targetRoom = rooms.find((r) => r.id === roomId)
+    const num = roomNum || targetRoom?.number || ''
+    if (!confirm(`Are you sure you want to delete Room ${num}?`)) return
+    setBusy(true)
+    try {
+      const res = await apiAs<{ success?: boolean; error?: string }>(
+        `/api/rooms?id=${roomId}`,
+        getCachedUser(),
+        { method: 'DELETE' }
+      )
+      if (res && res.error) {
+        alert(res.error)
+      } else {
+        setViewRoom(null)
+        setDeleteOpen(false)
+        setDeleteRoomId('')
+        await load()
+        onDataChanged()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not delete room')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function addRoom() {
     const cleanNum = newNumber.replace(/\D/g, '').trim()
     if (!cleanNum) return
@@ -178,9 +208,18 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
             {rooms.filter((r) => r.status === 'MAINTENANCE').length} maintenance
           </p>
         </div>
-        <Button variant="outline" className="gap-2" onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4" /> Add Room
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 className="h-4 w-4" /> Delete Room
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={() => setAddOpen(true)}>
+            <Plus className="h-4 w-4" /> Add Room
+          </Button>
+        </div>
       </div>
 
       <TableControls
@@ -377,6 +416,16 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
                 </div>
               </div>
             )}
+            {viewRoom && (
+              <Button
+                variant="destructive"
+                className="w-full mt-2"
+                disabled={busy || viewRoom.status === 'OCCUPIED'}
+                onClick={() => handleDeleteRoom(viewRoom.id, viewRoom.number)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" /> Delete Room {viewRoom.number}
+              </Button>
+            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -428,6 +477,41 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
             </div>
             <Button className="w-full" disabled={busy || !newNumber.trim()} onClick={addRoom}>
               Add Room
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete room */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>Delete Room</DialogTitle>
+            <DialogDescription>Select a room to delete. Occupied rooms or rooms with history cannot be deleted.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Select Room</Label>
+              <Select value={deleteRoomId} onValueChange={setDeleteRoomId}>
+                <SelectTrigger aria-label="Select Room to Delete">
+                  <SelectValue placeholder="Choose a room…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {rooms.map((r) => (
+                    <SelectItem key={r.id} value={r.id}>
+                      Room {r.number} ({r.type} - {r.status})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              variant="destructive"
+              className="w-full"
+              disabled={busy || !deleteRoomId}
+              onClick={() => handleDeleteRoom(deleteRoomId)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" /> Delete Selected Room
             </Button>
           </div>
         </DialogContent>

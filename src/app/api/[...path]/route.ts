@@ -162,6 +162,39 @@ async function updateRoom(body: Record<string, unknown>) {
   return NextResponse.json(room)
 }
 
+async function deleteRoom(req: NextRequest, user: RequestUser) {
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Room id is required' }, { status: 400 })
+
+  const room = await prisma.room.findUnique({
+    where: { id },
+    include: { bookings: { where: { status: 'ACTIVE' } } },
+  })
+
+  if (!room) {
+    return NextResponse.json({ error: 'Room not found' }, { status: 404 })
+  }
+
+  if (room.status === 'OCCUPIED' || room.bookings.length > 0) {
+    return NextResponse.json({ error: `Cannot delete Room ${room.number}: it is currently occupied or has an active booking` }, { status: 400 })
+  }
+
+  const totalBookings = await prisma.booking.count({ where: { roomId: id } })
+  if (totalBookings > 0) {
+    return NextResponse.json({ error: `Cannot delete Room ${room.number}: it has historical booking records` }, { status: 400 })
+  }
+
+  const foodOrders = await prisma.foodOrder.count({ where: { roomId: id } })
+  if (foodOrders > 0) {
+    return NextResponse.json({ error: `Cannot delete Room ${room.number}: it has associated food order records` }, { status: 400 })
+  }
+
+  await prisma.room.delete({ where: { id } })
+  await logAudit('DELETE_ROOM', 'Room', id, `Deleted room ${room.number}`, user)
+  return NextResponse.json({ success: true, message: `Room ${room.number} deleted successfully` })
+}
+
 // ============ GUESTS ============
 async function listGuests(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -1649,6 +1682,7 @@ async function dispatch(
       if (method === 'GET') return await listRooms(req)
       if (method === 'POST') return await createRoom(body)
       if (method === 'PATCH') return await updateRoom(body)
+      if (method === 'DELETE') return await deleteRoom(req, user)
       break
     case 'guests':
       if (method === 'GET' && url.searchParams.get('phone')) return await lookupGuest(req)
