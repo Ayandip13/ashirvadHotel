@@ -32,11 +32,22 @@ async function main() {
   const deletedRooms = await prisma.room.deleteMany({})
   console.log(`Deleted ${deletedRooms.count} Room records.`)
 
-  // 7. StaffPayment
+  // 7. StaffPayment & Staff
   const deletedStaffPayments = await prisma.staffPayment.deleteMany({})
   console.log(`Deleted ${deletedStaffPayments.count} StaffPayment records.`)
 
-  // 8. AuditLog
+  const deletedStaff = await prisma.staff.deleteMany({})
+  console.log(`Deleted ${deletedStaff.count} Staff records.`)
+
+  // 8. MenuItem
+  const deletedMenuItems = await prisma.menuItem.deleteMany({})
+  console.log(`Deleted ${deletedMenuItems.count} MenuItem records.`)
+
+  // 9. ExpenseCategory
+  const deletedExpenseCategories = await prisma.expenseCategory.deleteMany({})
+  console.log(`Deleted ${deletedExpenseCategories.count} ExpenseCategory records.`)
+
+  // 10. AuditLog
   const deletedAuditLogs = await prisma.auditLog.deleteMany({})
   console.log(`Deleted ${deletedAuditLogs.count} AuditLog records.`)
 
@@ -47,7 +58,7 @@ async function main() {
     create: { key: 'invoiceCounter', value: '1' },
   })
 
-  console.log('Test data successfully wiped! All revenue, rooms, bookings and bills are cleared.')
+  console.log('Test data successfully wiped! All rooms, revenue, expenses, staff, bookings, history, and bills are completely cleared.')
 }
 
 main()
