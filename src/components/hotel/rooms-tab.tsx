@@ -19,11 +19,13 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CheckinDialog } from './checkin-dialog'
+import { GenerateBillDialog, type Bill } from './generate-bill-dialog'
 import { RoomStatusBadge } from './status-badge'
 import { TableControls } from './table-controls'
-import { api, apiAs, formatINR, formatDate } from '@/lib/hotel-utils'
+import { Separator } from '@/components/ui/separator'
+import { api, apiAs, formatINR, formatDate, formatDateTime } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, Plus, BrushCleaning, Wrench, BedDouble, Printer, Wallet, Trash2 } from 'lucide-react'
+import { Loader2, Plus, BrushCleaning, Wrench, BedDouble, Printer, Wallet, Trash2, Receipt, Building2 } from 'lucide-react'
 
 interface Guest {
   id: string
@@ -81,6 +83,8 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
   const [newType, setNewType] = useState('Non-AC')
   const [newRate, setNewRate] = useState('800')
   const [newCapacity, setNewCapacity] = useState('2')
+  const [billBooking, setBillBooking] = useState<any | null>(null)
+  const [lastBill, setLastBill] = useState<Bill | null>(null)
 
   useEffect(() => {
     if (initialFilter) setSearch(initialFilter)
@@ -292,9 +296,17 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
         open={!!checkinRoom}
         onOpenChange={(o) => !o && setCheckinRoom(null)}
         room={checkinRoom}
-        onSuccess={() => {
-          load()
+        onSuccess={async () => {
+          const targetRoomId = checkinRoom?.id
+          const updatedRooms = await api<Room[]>('/api/rooms')
+          setRooms(updatedRooms)
           onDataChanged()
+          if (targetRoomId) {
+            const freshRoom = updatedRooms.find((r) => r.id === targetRoomId)
+            if (freshRoom) {
+              setViewRoom(freshRoom)
+            }
+          }
         }}
       />
 
@@ -340,8 +352,15 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
                   <Button
                     className="bg-emerald-600 hover:bg-emerald-700 text-white"
                     onClick={() => {
-                      onNavigate?.({ tab: 'billing', q: viewRoom.number })
-                      setViewRoom(null)
+                      if (viewRoom?.bookings?.[0]) {
+                        const b = viewRoom.bookings[0]
+                        setBillBooking({
+                          ...b,
+                          ratePerDay: viewRoom.rate,
+                          room: { id: viewRoom.id, number: viewRoom.number, type: viewRoom.type },
+                        })
+                        setViewRoom(null)
+                      }
                     }}
                   >
                     <Printer className="mr-1.5 h-4 w-4" /> Print Bill
@@ -349,8 +368,15 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
                   <Button
                     variant="outline"
                     onClick={() => {
-                      onNavigate?.({ tab: 'billing', q: viewRoom.number })
-                      setViewRoom(null)
+                      if (viewRoom?.bookings?.[0]) {
+                        const b = viewRoom.bookings[0]
+                        setBillBooking({
+                          ...b,
+                          ratePerDay: viewRoom.rate,
+                          room: { id: viewRoom.id, number: viewRoom.number, type: viewRoom.type },
+                        })
+                        setViewRoom(null)
+                      }
                     }}
                   >
                     <Wallet className="mr-1.5 h-4 w-4" /> Billing / Checkout
@@ -514,6 +540,95 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
               <Trash2 className="mr-2 h-4 w-4" /> Delete Selected Room
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+      {/* Generate Bill Modal in-place */}
+      <GenerateBillDialog
+        open={!!billBooking}
+        onOpenChange={(o) => !o && setBillBooking(null)}
+        booking={billBooking}
+        onSuccess={(bill) => {
+          setLastBill(bill)
+          load()
+          onDataChanged()
+        }}
+      />
+
+      {/* Printable Invoice Modal */}
+      <Dialog open={!!lastBill} onOpenChange={(o) => !o && setLastBill(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Receipt className="h-5 w-5 text-emerald-600 dark:text-emerald-400" /> Bill {lastBill?.billNumber}
+            </DialogTitle>
+            <DialogDescription>{formatDateTime(lastBill?.createdAt)}</DialogDescription>
+          </DialogHeader>
+          {lastBill && (
+            <div className="space-y-3">
+              <div className="print-area rounded-lg border p-4 text-sm">
+                <div className="mb-3 text-center">
+                  <p className="text-lg font-bold">Ashirbad Lodge</p>
+                  <p className="mt-1 text-sm font-semibold uppercase tracking-wide">
+                    {lastBill.actualGst > 0 ? (
+                      <span className="text-emerald-700 dark:text-emerald-400">GST TAX INVOICE</span>
+                    ) : (
+                      <span>NON-GST INVOICE / CASH MEMO</span>
+                    )}
+                  </p>
+                </div>
+                <div className="mb-3 space-y-0.5 border-y py-2 text-xs text-muted-foreground">
+                  <p>Invoice: {lastBill.billNumber} · {formatDateTime(lastBill.createdAt)}</p>
+                  <p>Guest: {lastBill.booking?.guest?.name || 'Guest'} ({lastBill.booking?.guest?.phone})</p>
+                  <p>Room: {lastBill.booking?.room?.number}</p>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Room Charge ({lastBill.days} night(s))</span>
+                    <span className="font-medium">{formatINR(lastBill.billedRoomTotal)}</span>
+                  </div>
+                  {lastBill.foodTotal > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Food Charges</span>
+                      <span className="font-medium">{formatINR(lastBill.foodTotal)}</span>
+                    </div>
+                  )}
+                  {lastBill.extraCharges > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Extra Charges</span>
+                      <span className="font-medium">{formatINR(lastBill.extraCharges)}</span>
+                    </div>
+                  )}
+                  {lastBill.discount > 0 && (
+                    <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                      <span>Discount</span>
+                      <span className="font-medium">-{formatINR(lastBill.discount)}</span>
+                    </div>
+                  )}
+                  {lastBill.actualGst > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">GST ({lastBill.gstPercent}%)</span>
+                      <span className="font-medium">{formatINR(lastBill.actualGst)}</span>
+                    </div>
+                  )}
+                  {lastBill.advanceApplied > 0 && (
+                    <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                      <span>Advance Received</span>
+                      <span className="font-medium">-{formatINR(lastBill.advanceApplied)}</span>
+                    </div>
+                  )}
+                  <Separator />
+                  <div className="flex justify-between font-bold">
+                    <span>Grand Total</span>
+                    <span>{formatINR(lastBill.grandTotal)}</span>
+                  </div>
+                </div>
+                <p className="mt-3 text-center text-[10px] text-muted-foreground">Thank you — please visit again!</p>
+              </div>
+              <Button className="w-full print:hidden" variant="outline" onClick={() => window.print()}>
+                <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
