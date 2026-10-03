@@ -28,6 +28,7 @@ export class RoomService {
     const room = await prisma.room.create({
       data: {
         number: data.number,
+        floor: data.floor || data.number.charAt(0) || '1',
         type: data.type || 'Non-AC',
         capacity: Number(data.capacity) || 2,
         rate: Number(data.rate) || 1000,
@@ -51,6 +52,7 @@ export class RoomService {
       where: { id },
       data: {
         ...(data.number !== undefined && { number: data.number }),
+        ...(data.floor !== undefined && { floor: data.floor }),
         ...(data.type !== undefined && { type: data.type }),
         ...(data.capacity !== undefined && { capacity: Number(data.capacity) }),
         ...(data.rate !== undefined && { rate: Number(data.rate) }),
@@ -67,15 +69,15 @@ export class RoomService {
   static async deleteRoom(id: string, user: RequestUser) {
     const room = await prisma.room.findUnique({
       where: { id },
-      include: { bookings: { where: { status: 'ACTIVE' } } },
+      include: { bookings: { where: { status: { in: ['ACTIVE', 'BOOKED'] } } } },
     })
 
     if (!room) {
       throw new Error('Room not found')
     }
 
-    if (room.bookings.length > 0) {
-      throw new Error(`Cannot delete room ${room.number} while it has active bookings`)
+    if (room.status === 'OCCUPIED' || room.bookings.length > 0) {
+      throw new Error(`Cannot delete room ${room.number}: it is currently occupied or has active bookings`)
     }
 
     await prisma.room.delete({ where: { id } })

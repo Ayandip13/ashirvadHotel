@@ -127,7 +127,7 @@ async function listRooms(req: NextRequest) {
 }
 
 async function createRoom(body: Record<string, unknown>) {
-  const { number, type, capacity, rate, notes } = body
+  const { number, floor, type, capacity, rate, notes } = body
   if (!number) return NextResponse.json({ error: 'Room number required' }, { status: 400 })
   const cleanNumber = String(number).replace(/\D/g, '').trim()
   if (!cleanNumber) return NextResponse.json({ error: 'Room number must only contain digits' }, { status: 400 })
@@ -136,6 +136,7 @@ async function createRoom(body: Record<string, unknown>) {
   const room = await prisma.room.create({
     data: {
       number: cleanNumber,
+      floor: floor ? String(floor) : cleanNumber.charAt(0) || '1',
       type: type ? String(type) : 'Non-AC',
       capacity: parseInt(String(capacity)) || 2,
       rate: num(rate) || 800,
@@ -146,11 +147,12 @@ async function createRoom(body: Record<string, unknown>) {
 }
 
 async function updateRoom(body: Record<string, unknown>) {
-  const { id, status, housekeeping, rate, type, capacity, notes } = body
+  const { id, floor, status, housekeeping, rate, type, capacity, notes } = body
   if (!id) return NextResponse.json({ error: 'Room id required' }, { status: 400 })
   const room = await prisma.room.update({
     where: { id: String(id) },
     data: {
+      ...(floor !== undefined && { floor: String(floor) }),
       ...(status !== undefined && { status: String(status) }),
       ...(housekeeping !== undefined && { housekeeping: String(housekeeping) }),
       ...(rate !== undefined && { rate: num(rate) }),
@@ -169,7 +171,7 @@ async function deleteRoom(req: NextRequest, user: RequestUser) {
 
   const room = await prisma.room.findUnique({
     where: { id },
-    include: { bookings: { where: { status: 'ACTIVE' } } },
+    include: { bookings: { where: { status: { in: ['ACTIVE', 'BOOKED'] } } } },
   })
 
   if (!room) {
@@ -177,17 +179,10 @@ async function deleteRoom(req: NextRequest, user: RequestUser) {
   }
 
   if (room.status === 'OCCUPIED' || room.bookings.length > 0) {
-    return NextResponse.json({ error: `Cannot delete Room ${room.number}: it is currently occupied or has an active booking` }, { status: 400 })
-  }
-
-  const totalBookings = await prisma.booking.count({ where: { roomId: id } })
-  if (totalBookings > 0) {
-    return NextResponse.json({ error: `Cannot delete Room ${room.number}: it has historical booking records` }, { status: 400 })
-  }
-
-  const foodOrders = await prisma.foodOrder.count({ where: { roomId: id } })
-  if (foodOrders > 0) {
-    return NextResponse.json({ error: `Cannot delete Room ${room.number}: it has associated food order records` }, { status: 400 })
+    return NextResponse.json(
+      { error: `Cannot delete Room ${room.number}: it is currently occupied or has active bookings/reservations` },
+      { status: 400 }
+    )
   }
 
   await prisma.room.delete({ where: { id } })
@@ -658,27 +653,28 @@ async function createBill(body: Record<string, unknown>, user: RequestUser) {
   const billedRoom = !isNaN(customRoom) && customRoom > 0 ? customRoom : actualRoomTotal
 
   // Permission control for custom corporate billing
-  const isCustom = Math.abs(billedRoom - actualRoomTotal) > 0.01
+  const isCustom = Math.abs(billedRoom - actualRoomTotal) > 0.01 || (billedRoomTotal !== undefined && parseFloat(String(billedRoomTotal)) > 0)
   if (isCustom) {
-    if (!user.id || !managerPin) {
+    if (!managerPin) {
       return NextResponse.json(
-        { error: 'Custom billing requires manager approval (PIN required)' },
+        { error: 'Custom corporate billing requires Manager or Admin PIN approval' },
         { status: 403 }
       )
     }
-    const approver = await prisma.user.findUnique({ where: { id: String(user.id) } })
-    if (
-      !approver ||
-      !approver.active ||
-      approver.pin !== String(managerPin) ||
-      !['ADMIN', 'MANAGER'].includes(approver.role)
-    ) {
+    const approver = await prisma.user.findFirst({
+      where: {
+        pin: String(managerPin),
+        active: true,
+        role: { in: ['ADMIN', 'MANAGER'] },
+      },
+    })
+    if (!approver) {
       return NextResponse.json(
-        { error: 'Custom billing blocked: invalid manager PIN or insufficient role' },
+        { error: 'Custom billing blocked: Invalid Manager or Admin PIN' },
         { status: 403 }
       )
     }
-    user = { id: user.id, name: approver.name, role: approver.role }
+    user = { id: approver.id, name: approver.name, role: approver.role }
   }
 
   let foodTotal = 0

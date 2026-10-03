@@ -160,12 +160,26 @@ export function GenerateBillDialog({
 
   async function generateBill() {
     if (!booking || !calc) return
-    if (calc.balance < -0.01) {
-      setError(`Payment split (₹${calc.paid}) cannot exceed total ₹${calc.grandTotal}`)
+    if (num(days) < 1) {
+      setError('Billable Days must be at least 1')
       return
     }
-    if (customMode && calc.adjustment !== 0 && managerPin.length < 3) {
-      setError('Custom billing needs a manager PIN for approval')
+    if (customMode) {
+      if (num(customTotal) <= 0) {
+        setError('Billed Amount (Custom) is required for custom billing')
+        return
+      }
+      if (!managerPin || managerPin.trim().length < 3) {
+        setError('Manager or Admin PIN (approval) is mandatory for custom billing')
+        return
+      }
+    }
+    if (booking.isCorporate && !corporateName.trim()) {
+      setError('Company Name is required for Corporate Guest bill')
+      return
+    }
+    if (calc.balance < -0.01) {
+      setError(`Payment split (₹${calc.paid}) cannot exceed total ₹${calc.grandTotal}`)
       return
     }
     setSaving(true)
@@ -293,7 +307,7 @@ export function GenerateBillDialog({
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <Label>GST %</Label>
+                  <Label>GST % *</Label>
                   <div className="flex gap-1">
                     <button
                       type="button"
@@ -327,15 +341,17 @@ export function GenerateBillDialog({
                 <Input type="number" value={gstPercent} onChange={(e) => setGstPercent(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label>Billable Days</Label>
+                <Label>Billable Days *</Label>
                 <Input type="number" min="1" value={days} onChange={(e) => setDays(e.target.value)} />
               </div>
             </div>
 
-            {(corporateName || gstNumber || num(gstPercent) > 0) && (
+            {(corporateName || gstNumber || num(gstPercent) > 0 || booking.isCorporate) && (
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>Bill To (Company)</Label>
+                  <Label>
+                    Bill To (Company) {booking.isCorporate ? <span className="text-red-500">*</span> : ''}
+                  </Label>
                   <Input value={corporateName} onChange={(e) => setCorporateName(e.target.value)} placeholder="Company name" />
                 </div>
                 <div className="space-y-1.5">

@@ -60,7 +60,7 @@ model Booking {
   advance        Float       @default(0)
   isCorporate    Boolean     @default(false)
   notes          String?
-  room           Room        @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  room           Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
   guest          Guest       @relation(fields: [guestId], references: [id], onDelete: Restrict)
   bills          Bill[]
   foodOrders     FoodOrder[]

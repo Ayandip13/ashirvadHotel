@@ -46,6 +46,7 @@ interface Booking {
 interface Room {
   id: string
   number: string
+  floor?: string | null
   type: string
   capacity: number
   rate: number
@@ -80,6 +81,7 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleteRoomId, setDeleteRoomId] = useState('')
   const [newNumber, setNewNumber] = useState('')
+  const [newFloor, setNewFloor] = useState('1')
   const [newType, setNewType] = useState('Non-AC')
   const [newRate, setNewRate] = useState('800')
   const [newCapacity, setNewCapacity] = useState('2')
@@ -104,13 +106,13 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
     load()
   }, [load, refreshKey])
 
-  const floors = useMemo(() => [...new Set(rooms.map((r) => r.number.charAt(0)))].sort(), [rooms])
+  const floors = useMemo(() => [...new Set(rooms.map((r) => r.floor || r.number.charAt(0)))].sort(), [rooms])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return rooms.filter((r) => {
       if (q && !`${r.number} ${r.type}`.toLowerCase().includes(q)) return false
-      if (floor !== 'ALL' && !r.number.startsWith(floor)) return false
+      if (floor !== 'ALL' && (r.floor ? r.floor !== floor : !r.number.startsWith(floor))) return false
       if (type !== 'ALL' && r.type !== type) return false
       if (status !== 'ALL' && r.status !== status) return false
       return true
@@ -119,7 +121,7 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
 
   const grouped = useMemo(() => {
     return filtered.reduce<Record<string, Room[]>>((acc, room) => {
-      const f = room.number.charAt(0)
+      const f = room.floor || room.number.charAt(0)
       if (!acc[f]) acc[f] = []
       acc[f].push(room)
       return acc
@@ -149,6 +151,13 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
     const targetRoom = rooms.find((r) => r.id === roomId)
     const num = roomNum || targetRoom?.number || ''
     if (!confirm(`Are you sure you want to delete Room ${num}?`)) return
+    
+    // Instant optimistic update
+    setRooms((prev) => prev.filter((r) => r.id !== roomId))
+    setViewRoom(null)
+    setDeleteOpen(false)
+    setDeleteRoomId('')
+    
     setBusy(true)
     try {
       const res = await apiAs<{ success?: boolean; error?: string }>(
@@ -158,15 +167,13 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
       )
       if (res && res.error) {
         alert(res.error)
-      } else {
-        setViewRoom(null)
-        setDeleteOpen(false)
-        setDeleteRoomId('')
         await load()
+      } else {
         onDataChanged()
       }
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Could not delete room')
+      await load()
     } finally {
       setBusy(false)
     }
@@ -179,10 +186,17 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
     try {
       await apiAs('/api/rooms', getCachedUser(), {
         method: 'POST',
-        body: JSON.stringify({ number: cleanNum, type: newType, rate: newRate, capacity: newCapacity }),
+        body: JSON.stringify({
+          number: cleanNum,
+          floor: newFloor.trim() || cleanNum.charAt(0) || '1',
+          type: newType,
+          rate: newRate,
+          capacity: newCapacity,
+        }),
       })
       setAddOpen(false)
       setNewNumber('')
+      setNewFloor('1')
       await load()
       onDataChanged()
     } catch (e) {
@@ -215,6 +229,13 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
         <div className="flex items-center gap-2">
           <Button variant="outline" className="gap-2" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" /> Add Room
+          </Button>
+          <Button
+            variant="outline"
+            className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
+            onClick={() => setDeleteOpen(true)}
+          >
+            <Trash2 className="h-4 w-4" /> Delete Room
           </Button>
         </div>
       </div>
@@ -403,37 +424,48 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
               </Button>
             )}
             {viewRoom && (
-              <div className="flex gap-2">
-                <div className="flex-1 space-y-1">
-                  <Label htmlFor="room-rate" className="text-xs">
-                    Rate / night
-                  </Label>
-                  <Input
-                    id="room-rate"
-                    type="number"
-                    defaultValue={viewRoom.rate}
-                    onBlur={(e) => {
-                      const v = parseFloat(e.target.value)
-                      if (!isNaN(v) && v > 0 && v !== viewRoom.rate) patchRoom(viewRoom, { rate: v })
-                    }}
-                  />
+              <>
+                <div className="flex gap-2">
+                  <div className="flex-1 space-y-1">
+                    <Label htmlFor="room-rate" className="text-xs">
+                      Rate / night
+                    </Label>
+                    <Input
+                      id="room-rate"
+                      type="number"
+                      defaultValue={viewRoom.rate}
+                      onBlur={(e) => {
+                        const v = parseFloat(e.target.value)
+                        if (!isNaN(v) && v > 0 && v !== viewRoom.rate) patchRoom(viewRoom, { rate: v })
+                      }}
+                    />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <Label className="text-xs">Type</Label>
+                    <Select value={viewRoom.type} onValueChange={(t) => t !== viewRoom.type && patchRoom(viewRoom, { type: t })}>
+                      <SelectTrigger aria-label="Room type">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TYPES.map((t) => (
+                          <SelectItem key={t} value={t}>
+                            {t}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-                <div className="flex-1 space-y-1">
-                  <Label className="text-xs">Type</Label>
-                  <Select value={viewRoom.type} onValueChange={(t) => t !== viewRoom.type && patchRoom(viewRoom, { type: t })}>
-                    <SelectTrigger aria-label="Room type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TYPES.map((t) => (
-                        <SelectItem key={t} value={t}>
-                          {t}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
+
+                <Button
+                  variant="destructive"
+                  className="w-full mt-2"
+                  disabled={busy || viewRoom.status === 'OCCUPIED'}
+                  onClick={() => handleDeleteRoom(viewRoom.id, viewRoom.number)}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" /> Delete Room {viewRoom.number}
+                </Button>
+              </>
             )}
           </div>
         </DialogContent>
@@ -447,17 +479,35 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
             <DialogDescription>Room structure is modular — add more rooms anytime.</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="add-num">Room Number</Label>
-              <Input
-                id="add-num"
-                type="text"
-                inputMode="numeric"
-                pattern="[0-9]*"
-                placeholder="e.g. 401"
-                value={newNumber}
-                onChange={(e) => setNewNumber(e.target.value.replace(/\D/g, ''))}
-              />
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="add-num">Room Number *</Label>
+                <Input
+                  id="add-num"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  placeholder="e.g. 401"
+                  value={newNumber}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, '')
+                    setNewNumber(val)
+                    if (val.length > 0 && !newFloor) {
+                      setNewFloor(val.charAt(0))
+                    }
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="add-floor">Floor *</Label>
+                <Input
+                  id="add-floor"
+                  type="text"
+                  placeholder="e.g. 1, 2, 4"
+                  value={newFloor}
+                  onChange={(e) => setNewFloor(e.target.value)}
+                />
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
@@ -490,6 +540,44 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Delete room modal */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="text-red-600 flex items-center gap-2">
+              <Trash2 className="h-5 w-5" /> Delete Room
+            </DialogTitle>
+            <DialogDescription>Select a vacant room to remove permanently.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Select Room</Label>
+              <Select value={deleteRoomId} onValueChange={setDeleteRoomId}>
+                <SelectTrigger aria-label="Select room to delete">
+                  <SelectValue placeholder="Choose a room" />
+                </SelectTrigger>
+                <SelectContent>
+                  {rooms.map((r) => (
+                    <SelectItem key={r.id} value={r.id} disabled={r.status === 'OCCUPIED'}>
+                      Room {r.number} ({r.type} - {r.status})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              variant="destructive"
+              className="w-full"
+              disabled={busy || !deleteRoomId}
+              onClick={() => handleDeleteRoom(deleteRoomId)}
+            >
+              Delete Room
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Generate Bill Modal in-place */}
       <GenerateBillDialog
         open={!!billBooking}
