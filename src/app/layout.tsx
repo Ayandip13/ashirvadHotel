@@ -15,9 +15,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Ashirvad Hotel — Booking & Operations Management",
+  title: "Ashirbad Hotel — Booking & Operations Management",
   description:
-    "Simple, fast hotel management for Ashirvad Hotel: room dashboard, bookings, guest auto-fill, corporate billing with internal ledger, restaurant, payments, staff, expenses, reports. Light & dark mode.",
+    "Simple, fast hotel management for Ashirbad Hotel: room dashboard, bookings, guest auto-fill, corporate billing with internal ledger, restaurant, payments, staff, expenses, reports. Light & dark mode.",
   keywords: [
     "hotel management",
     "booking",

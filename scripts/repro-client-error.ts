@@ -3,6 +3,7 @@
  * Emulates: Windows Chrome, en-IN locale, Asia/Kolkata timezone, wide desktop viewport,
  * pre-existing localStorage (stale hotel-user + theme), and old-cached-page scenario.
  */
+// @ts-ignore
 import { chromium } from 'playwright'
 
 const URL = process.env.TARGET_URL || 'https://hotel-manager-two.vercel.app/'

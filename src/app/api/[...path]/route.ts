@@ -50,11 +50,11 @@ async function logAudit(
 }
 
 const DEFAULT_SETTINGS: Record<string, string> = {
-  hotelName: 'Ashirvad Lodge',
+  hotelName: 'Ashirbad Lodge',
   hotelAddress: 'Station Road, Kolkata',
   hotelPhone: '+91 90000 00000',
   hotelGstin: '',
-  restaurantName: 'Ashirvad Restaurant',
+  restaurantName: 'Ashirbad Restaurant',
   restaurantAddress: 'Station Road, Kolkata',
   restaurantPhone: '+91 90000 00000',
   restaurantGstin: '',
