@@ -693,6 +693,17 @@ async function createBill(body: Record<string, unknown>, user: RequestUser) {
 
   const extra = num(extraCharges)
   const disc = num(discount)
+
+  if (gstPercent !== undefined && gstPercent !== null && gstPercent !== '') {
+    const parsedGst = parseFloat(String(gstPercent))
+    if (isNaN(parsedGst) || !isFinite(parsedGst) || parsedGst < 0 || parsedGst > 100) {
+      return NextResponse.json(
+        { error: 'GST percentage must be a valid number between 0 and 100' },
+        { status: 400 }
+      )
+    }
+  }
+
   const gstPct = gstPercent !== undefined && gstPercent !== '' ? num(gstPercent) : parseFloat(settings.gstPercent) || 0
   const taxable = Math.max(0, billedRoom + foodTotal + extra - disc)
   const billedGst = Math.round(taxable * gstPct) / 100
@@ -878,6 +889,193 @@ async function addBillPayment(body: Record<string, unknown>, user: RequestUser) 
     user
   )
   return NextResponse.json(updated)
+}
+
+async function updateBill(body: Record<string, unknown>, user: RequestUser) {
+  const {
+    id, billedRoomTotal, gstPercent, extraCharges, discount,
+    payCash, payUpi, payCard, corporateName, gstNumber, notes, roomId, managerPin,
+  } = body
+
+  if (!id) return NextResponse.json({ error: 'Bill ID is required' }, { status: 400 })
+
+  const bill = await prisma.bill.findUnique({
+    where: { id: String(id) },
+    include: { booking: { include: { room: true, guest: true } } },
+  })
+  if (!bill) return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
+
+  // Validate gstPercent if provided
+  let newGstPercent = bill.gstPercent
+  if (gstPercent !== undefined && gstPercent !== null && gstPercent !== '') {
+    const parsedGst = parseFloat(String(gstPercent))
+    if (isNaN(parsedGst) || !isFinite(parsedGst) || parsedGst < 0 || parsedGst > 100) {
+      return NextResponse.json(
+        { error: 'GST percentage must be a valid number between 0 and 100' },
+        { status: 400 }
+      )
+    }
+    newGstPercent = parsedGst
+  }
+
+  // Validate numeric fields
+  let newBilledRoom = bill.billedRoomTotal
+  if (billedRoomTotal !== undefined && billedRoomTotal !== null && billedRoomTotal !== '') {
+    const parsedBilled = parseFloat(String(billedRoomTotal))
+    if (isNaN(parsedBilled) || !isFinite(parsedBilled) || parsedBilled < 0) {
+      return NextResponse.json({ error: 'Customer-facing billed room total must be a non-negative number' }, { status: 400 })
+    }
+    newBilledRoom = parsedBilled
+  }
+
+  const extra = extraCharges !== undefined ? Math.max(0, num(extraCharges)) : bill.extraCharges
+  const disc = discount !== undefined ? Math.max(0, num(discount)) : bill.discount
+
+  // Preserved original/internal room amount
+  const actualRoomTotal = bill.actualRoomTotal
+
+  // Permission check if changing to or from custom billing amount
+  const isCustom = Math.abs(newBilledRoom - actualRoomTotal) > 0.01
+  if (isCustom && managerPin) {
+    const approver = await prisma.user.findFirst({
+      where: {
+        pin: String(managerPin),
+        active: true,
+        role: { in: ['ADMIN', 'MANAGER'] },
+      },
+    })
+    if (approver) {
+      user = { id: approver.id, name: approver.name, role: approver.role }
+    }
+  }
+
+  // Taxable and GST calculation based on customer-facing amount
+  const taxable = Math.max(0, newBilledRoom + bill.foodTotal + extra - disc)
+  const newBilledGst = Math.round(taxable * newGstPercent) / 100
+
+  const advanceApplied = Math.min(bill.booking.advance, taxable + newBilledGst)
+  const newGrandTotal = Math.max(0, Math.round((taxable + newBilledGst - advanceApplied) * 100) / 100)
+
+  const cash = payCash !== undefined ? num(payCash) : bill.payCash
+  const upi = payUpi !== undefined ? num(payUpi) : bill.payUpi
+  const card = payCard !== undefined ? num(payCard) : bill.payCard
+  const paidTotal = cash + upi + card
+
+  if (paidTotal > newGrandTotal + 0.01) {
+    return NextResponse.json(
+      { error: `Payment split (₹${paidTotal}) cannot exceed updated bill total (₹${newGrandTotal})` },
+      { status: 400 }
+    )
+  }
+
+  const updatedBill = await prisma.$transaction(async (tx) => {
+    // Optional room change for booking if requested
+    if (roomId && String(roomId) !== bill.booking.roomId) {
+      const targetRoom = await tx.room.findUnique({ where: { id: String(roomId) } })
+      if (targetRoom) {
+        await tx.booking.update({
+          where: { id: bill.bookingId },
+          data: { roomId: targetRoom.id },
+        })
+      }
+    }
+
+    const updated = await tx.bill.update({
+      where: { id: bill.id },
+      data: {
+        billedRoomTotal: newBilledRoom,
+        gstPercent: newGstPercent,
+        actualGst: newBilledGst,
+        extraCharges: extra,
+        discount: disc,
+        grandTotal: newGrandTotal,
+        payCash: cash,
+        payUpi: upi,
+        payCard: card,
+        advanceApplied,
+        isCorporate: isCustom || bill.isCorporate,
+        corporateName: corporateName !== undefined ? (corporateName ? String(corporateName) : null) : bill.corporateName,
+        gstNumber: gstNumber !== undefined ? (gstNumber ? String(gstNumber) : null) : bill.gstNumber,
+        notes: notes !== undefined ? (notes ? String(notes) : null) : bill.notes,
+      },
+    })
+
+    // Sync corresponding ledger entries
+    await tx.ledgerEntry.deleteMany({
+      where: { refId: bill.id },
+    })
+
+    const ledgerEntries: {
+      date: Date
+      type: string
+      category: string
+      description: string
+      amount: number
+      method: string
+      source: string
+      refId: string
+    }[] = []
+
+    if (actualRoomTotal > 0) {
+      ledgerEntries.push({
+        date: bill.createdAt,
+        type: 'INCOME',
+        category: 'ROOM_RENT',
+        description: `Room ${bill.booking.room.number} rent (${bill.days} day${bill.days > 1 ? 's' : ''} @ ₹${bill.booking.ratePerDay}) - ${bill.booking.guest.name}`,
+        amount: actualRoomTotal,
+        method: 'SPLIT',
+        source: 'AUTO',
+        refId: bill.id,
+      })
+    }
+    if (bill.foodTotal > 0) {
+      ledgerEntries.push({
+        date: bill.createdAt,
+        type: 'INCOME',
+        category: 'FOOD',
+        description: `Food charges - Room ${bill.booking.room.number} - ${bill.booking.guest.name}`,
+        amount: bill.foodTotal,
+        method: 'SPLIT',
+        source: 'AUTO',
+        refId: bill.id,
+      })
+    }
+    if (newBilledGst > 0) {
+      ledgerEntries.push({
+        date: bill.createdAt,
+        type: 'INCOME',
+        category: 'GST',
+        description: `GST ${newGstPercent}% on bill ${bill.billNumber}${newBilledRoom !== actualRoomTotal ? ' (on billed amount)' : ''}`,
+        amount: newBilledGst,
+        method: 'SPLIT',
+        source: 'AUTO',
+        refId: bill.id,
+      })
+    }
+
+    if (ledgerEntries.length > 0) {
+      await tx.ledgerEntry.createMany({ data: ledgerEntries })
+    }
+
+    return updated
+  })
+
+  await refreshBookingPaymentStatus(bill.bookingId)
+
+  await logAudit(
+    'BILL_UPDATE',
+    'Bill',
+    bill.id,
+    `Updated bill ${bill.billNumber}: customer amount ₹${newBilledRoom} (actual ₹${actualRoomTotal}), GST ${newGstPercent}% (₹${newBilledGst}), grand total ₹${newGrandTotal}`,
+    user
+  )
+
+  const reloadedBill = await prisma.bill.findUnique({
+    where: { id: bill.id },
+    include: { booking: { include: { room: true, guest: true } } },
+  })
+
+  return NextResponse.json(reloadedBill)
 }
 
 // ============ MENU ============
@@ -1901,7 +2099,9 @@ async function dispatch(
     case 'bills':
       if (method === 'GET') return await listBills(req)
       if (method === 'POST' && body.action === 'payment') return await addBillPayment(body, user)
+      if (method === 'POST' && body.action === 'update') return await updateBill(body, user)
       if (method === 'POST') return await createBill(body, user)
+      if (method === 'PATCH') return await updateBill(body, user)
       if (method === 'DELETE') return await deleteBill(req, user)
       break
     case 'menu':

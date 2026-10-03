@@ -1,0 +1,420 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
+import { apiAs, formatINR, formatDateTime } from '@/lib/hotel-utils'
+import { getCachedUser } from './user-context'
+import { Loader2, Info, Edit3 } from 'lucide-react'
+
+export interface Bill {
+  id: string
+  billNumber: string
+  days: number
+  actualRoomTotal: number
+  billedRoomTotal: number
+  gstPercent: number
+  actualGst: number
+  foodTotal: number
+  extraCharges: number
+  discount: number
+  grandTotal: number
+  payCash: number
+  payUpi: number
+  payCard: number
+  advanceApplied: number
+  isCorporate: boolean
+  corporateName?: string | null
+  gstNumber?: string | null
+  createdBy?: string | null
+  approvedBy?: string | null
+  notes?: string | null
+  createdAt: string
+  booking: {
+    id: string
+    checkIn: string
+    days: number
+    ratePerDay: number
+    advance: number
+    guest: {
+      id: string
+      name: string
+      phone: string
+      company?: string | null
+      gst?: string | null
+    }
+    room: {
+      id: string
+      number: string
+      type?: string
+    }
+  }
+}
+
+interface EditBillDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  bill: any
+  onSuccess: (updatedBill: any) => void
+}
+
+export function EditBillDialog({
+  open,
+  onOpenChange,
+  bill,
+  onSuccess,
+}: EditBillDialogProps) {
+  const [billedRoomTotal, setBilledRoomTotal] = useState('')
+  const [gstPercent, setGstPercent] = useState('12')
+  const [extraCharges, setExtraCharges] = useState('0')
+  const [discount, setDiscount] = useState('0')
+  const [payCash, setPayCash] = useState('0')
+  const [payUpi, setPayUpi] = useState('0')
+  const [payCard, setPayCard] = useState('0')
+  const [corporateName, setCorporateName] = useState('')
+  const [gstNumber, setGstNumber] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (open && bill) {
+      setBilledRoomTotal(String(bill.billedRoomTotal))
+      setGstPercent(String(bill.gstPercent))
+      setExtraCharges(String(bill.extraCharges || 0))
+      setDiscount(String(bill.discount || 0))
+      setPayCash(String(bill.payCash || 0))
+      setPayUpi(String(bill.payUpi || 0))
+      setPayCard(String(bill.payCard || 0))
+      setCorporateName(bill.corporateName || bill.booking?.guest?.company || '')
+      setGstNumber(bill.gstNumber || bill.booking?.guest?.gst || '')
+      setNotes(bill.notes || '')
+      setError('')
+    }
+  }, [open, bill])
+
+  const num = (v: string) => {
+    const parsed = parseFloat(v)
+    return isNaN(parsed) ? 0 : parsed
+  }
+
+  const calc = useMemo(() => {
+    if (!bill) return null
+    const actualRoomTotal = bill.actualRoomTotal
+    const customerAmount = num(billedRoomTotal)
+    const gstRate = num(gstPercent)
+    const extra = num(extraCharges)
+    const disc = num(discount)
+    const foodTotal = bill.foodTotal || 0
+
+    const taxable = Math.max(0, customerAmount + foodTotal + extra - disc)
+    const gstAmount = Math.round(taxable * gstRate) / 100
+    const advanceApplied = Math.min(bill.booking?.advance || 0, taxable + gstAmount)
+    const grandTotal = Math.max(0, Math.round((taxable + gstAmount - advanceApplied) * 100) / 100)
+
+    const paid = num(payCash) + num(payUpi) + num(payCard)
+    const balance = Math.round((grandTotal - paid) * 100) / 100
+
+    return {
+      actualRoomTotal,
+      customerAmount,
+      gstRate,
+      extra,
+      disc,
+      foodTotal,
+      taxable,
+      gstAmount,
+      advanceApplied,
+      grandTotal,
+      paid,
+      balance,
+    }
+  }, [bill, billedRoomTotal, gstPercent, extraCharges, discount, payCash, payUpi, payCard])
+
+  function autoBalance(method: 'CASH' | 'UPI' | 'CARD') {
+    if (!calc) return
+    setPayCash('0')
+    setPayUpi('0')
+    setPayCard('0')
+    const val = String(calc.grandTotal)
+    if (method === 'CASH') setPayCash(val)
+    if (method === 'UPI') setPayUpi(val)
+    if (method === 'CARD') setPayCard(val)
+  }
+
+  async function handleSave() {
+    if (!bill || !calc) return
+
+    const parsedGst = parseFloat(gstPercent)
+    if (isNaN(parsedGst) || !isFinite(parsedGst) || parsedGst < 0 || parsedGst > 100) {
+      setError('GST percentage must be a valid number between 0 and 100')
+      return
+    }
+
+    const parsedCustomerAmount = parseFloat(billedRoomTotal)
+    if (isNaN(parsedCustomerAmount) || !isFinite(parsedCustomerAmount) || parsedCustomerAmount < 0) {
+      setError('Customer-facing amount must be a valid non-negative number')
+      return
+    }
+
+    if (calc.balance < -0.01) {
+      setError(`Payment split (₹${calc.paid}) cannot exceed updated bill total (₹${calc.grandTotal})`)
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    try {
+      const user = getCachedUser()
+      const updated = await apiAs<Bill>('/api/bills', user, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          id: bill.id,
+          billedRoomTotal: parsedCustomerAmount,
+          gstPercent: parsedGst,
+          extraCharges: num(extraCharges),
+          discount: num(discount),
+          payCash: num(payCash),
+          payUpi: num(payUpi),
+          payCard: num(payCard),
+          corporateName: corporateName || null,
+          gstNumber: gstNumber || null,
+          notes: notes || null,
+        }),
+      })
+      onSuccess(updated)
+      onOpenChange(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update bill')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Edit3 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" /> Edit Bill — {bill?.billNumber}
+          </DialogTitle>
+          <DialogDescription>
+            Room {bill?.booking?.room?.number} • {bill?.booking?.guest?.name} • Created {bill ? formatDateTime(bill.createdAt) : ''}
+          </DialogDescription>
+        </DialogHeader>
+
+        {bill && calc && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-muted-foreground">Original Room Amount (Internal)</Label>
+                <div className="rounded-md bg-muted px-3 py-2 text-sm font-semibold">
+                  {formatINR(calc.actualRoomTotal)}{' '}
+                  <span className="text-[10px] font-normal text-muted-foreground">({bill.days}n × {formatINR(bill.booking?.ratePerDay)})</span>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-emerald-700 dark:text-emerald-300">
+                  Customer Amount (Billed) *
+                </Label>
+                <Input
+                  type="number"
+                  value={billedRoomTotal}
+                  onChange={(e) => setBilledRoomTotal(e.target.value)}
+                  placeholder="e.g. 500"
+                />
+              </div>
+            </div>
+
+            {calc.customerAmount !== calc.actualRoomTotal && (
+              <div className="flex items-start gap-2 rounded-lg bg-violet-50 p-2.5 text-xs text-violet-800 dark:bg-violet-950 dark:text-violet-200">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Bill reflects customer amount <b>{formatINR(calc.customerAmount)}</b> while original internal room tariff remains <b>{formatINR(calc.actualRoomTotal)}</b>.
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs font-semibold">GST % *</Label>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setGstPercent('0')}
+                      className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border transition-colors ${
+                        num(gstPercent) === 0 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      0%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGstPercent('12')}
+                      className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border transition-colors ${
+                        num(gstPercent) === 12 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      12%
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGstPercent('18')}
+                      className={`px-1.5 py-0.5 text-[10px] font-semibold rounded border transition-colors ${
+                        num(gstPercent) === 18 ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      18%
+                    </button>
+                  </div>
+                </div>
+                <Input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={gstPercent}
+                  onChange={(e) => setGstPercent(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Discount (₹)</Label>
+                <Input type="number" min="0" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Extra Charges (₹)</Label>
+                <Input type="number" min="0" value={extraCharges} onChange={(e) => setExtraCharges(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Food Charges (Read-only)</Label>
+                <div className="rounded-md bg-muted px-3 py-2 text-sm font-medium">
+                  {formatINR(bill.foodTotal)}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">Bill To / Company</Label>
+                <Input value={corporateName} onChange={(e) => setCorporateName(e.target.value)} placeholder="Company name" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold">GSTIN</Label>
+                <Input value={gstNumber} onChange={(e) => setGstNumber(e.target.value)} placeholder="GST number" />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Recalculated breakdown preview */}
+            <div className="space-y-1.5 rounded-lg bg-muted p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Customer Room Amount</span>
+                <span className="font-medium">{formatINR(calc.customerAmount)}</span>
+              </div>
+              {calc.foodTotal > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Food Charges</span>
+                  <span className="font-medium">{formatINR(calc.foodTotal)}</span>
+                </div>
+              )}
+              {calc.extra > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Extra Charges</span>
+                  <span className="font-medium">{formatINR(calc.extra)}</span>
+                </div>
+              )}
+              {calc.disc > 0 && (
+                <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                  <span>Discount</span>
+                  <span className="font-medium">-{formatINR(calc.disc)}</span>
+                </div>
+              )}
+              {calc.gstAmount > 0 ? (
+                <div className="flex justify-between font-semibold text-emerald-700 dark:text-emerald-400">
+                  <span>GST ({calc.gstRate}%)</span>
+                  <span>{formatINR(calc.gstAmount)}</span>
+                </div>
+              ) : (
+                <div className="flex justify-between text-muted-foreground">
+                  <span>GST (0%)</span>
+                  <span>₹0</span>
+                </div>
+              )}
+              {calc.advanceApplied > 0 && (
+                <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
+                  <span>Advance Received</span>
+                  <span className="font-medium">-{formatINR(calc.advanceApplied)}</span>
+                </div>
+              )}
+              <Separator />
+              <div className="flex justify-between text-base font-bold">
+                <span>Grand Total</span>
+                <span className="text-emerald-700 dark:text-emerald-400">{formatINR(calc.grandTotal)}</span>
+              </div>
+            </div>
+
+            {/* Payment split adjustment */}
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <p className="text-xs font-semibold">Payment Received Split</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Cash</Label>
+                  <Input type="number" value={payCash} onChange={(e) => setPayCash(e.target.value)} className="h-8 text-xs" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">UPI</Label>
+                  <Input type="number" value={payUpi} onChange={(e) => setPayUpi(e.target.value)} className="h-8 text-xs" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[11px]">Card</Label>
+                  <Input type="number" value={payCard} onChange={(e) => setPayCard(e.target.value)} className="h-8 text-xs" />
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex gap-1">
+                  <Button type="button" variant="outline" size="sm" className="h-6 text-[10px]" onClick={() => autoBalance('CASH')}>
+                    All Cash
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="h-6 text-[10px]" onClick={() => autoBalance('UPI')}>
+                    All UPI
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="h-6 text-[10px]" onClick={() => autoBalance('CARD')}>
+                    All Card
+                  </Button>
+                </div>
+                <span className={calc.balance > 0.01 ? 'font-bold text-amber-600' : 'font-bold text-emerald-700 dark:text-emerald-400'}>
+                  {calc.balance > 0.01 ? `Outstanding: ${formatINR(calc.balance)}` : '✓ Fully paid'}
+                </span>
+              </div>
+            </div>
+
+            {error && <p className="text-sm font-medium text-destructive">{error}</p>}
+
+            <Button className="w-full bg-emerald-600 hover:bg-emerald-700" onClick={handleSave} disabled={saving}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save &amp; Recalculate Bill
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  )
+}

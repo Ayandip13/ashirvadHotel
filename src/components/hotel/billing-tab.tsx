@@ -33,6 +33,7 @@ import {
 import { PaymentStatusBadge } from './status-badge'
 import { TableControls, SortableTh, useSort, usePagination } from './table-controls'
 import { GenerateBillDialog, type Bill as GenBill } from './generate-bill-dialog'
+import { EditBillDialog } from './edit-bill-dialog'
 import { api, apiAs, formatINR, formatDate, formatDateTime, exportCSV } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
 import {
@@ -46,6 +47,7 @@ import {
   ShieldCheck,
   AlertCircle,
   Trash2,
+  Edit3,
 } from 'lucide-react'
 
 interface Guest {
@@ -136,6 +138,7 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [lastBill, setLastBill] = useState<Bill | null>(null)
+  const [editBill, setEditBill] = useState<Bill | null>(null)
 
   // List filters
   const [search, setSearch] = useState('')
@@ -573,6 +576,15 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                       <Button
                         variant="ghost"
                         size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:bg-emerald-50 hover:text-emerald-700 dark:hover:bg-emerald-950/40"
+                        title="Edit Bill & GST"
+                        onClick={() => setEditBill(b)}
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
                         className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                         title="Delete Invoice"
                         onClick={() => deleteBill(b)}
@@ -747,8 +759,11 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                 <p className="mt-3 text-center text-[10px] text-muted-foreground">Thank you — please visit again!</p>
               </div>
               <div className="flex gap-2 print:hidden">
-                <Button className="flex-1" variant="outline" onClick={() => window.print()}>
+                <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
                   <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
+                </Button>
+                <Button variant="outline" onClick={() => setEditBill(lastBill)}>
+                  <Edit3 className="mr-2 h-4 w-4 text-emerald-600" /> Edit Bill
                 </Button>
                 <Button variant="destructive" onClick={() => deleteBill(lastBill)}>
                   <Trash2 className="mr-2 h-4 w-4" /> Delete
@@ -758,6 +773,18 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Edit Bill Dialog */}
+      <EditBillDialog
+        open={!!editBill}
+        onOpenChange={(o) => !o && setEditBill(null)}
+        bill={editBill}
+        onSuccess={(updatedBill) => {
+          setLastBill(updatedBill)
+          load()
+          onDataChanged()
+        }}
+      />
     </div>
   )
 }

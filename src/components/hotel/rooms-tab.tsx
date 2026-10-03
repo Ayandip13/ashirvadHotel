@@ -20,12 +20,13 @@ import {
 } from '@/components/ui/select'
 import { CheckinDialog } from './checkin-dialog'
 import { GenerateBillDialog, type Bill } from './generate-bill-dialog'
+import { EditBillDialog } from './edit-bill-dialog'
 import { RoomStatusBadge } from './status-badge'
 import { TableControls } from './table-controls'
 import { Separator } from '@/components/ui/separator'
 import { api, apiAs, formatINR, formatDate, formatDateTime } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, Plus, BrushCleaning, Wrench, BedDouble, Printer, Wallet, Trash2, Receipt, Building2 } from 'lucide-react'
+import { Loader2, Plus, BrushCleaning, Wrench, BedDouble, Printer, Wallet, Trash2, Receipt, Building2, Edit3 } from 'lucide-react'
 
 interface Guest {
   id: string
@@ -87,6 +88,7 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
   const [newCapacity, setNewCapacity] = useState('2')
   const [billBooking, setBillBooking] = useState<any | null>(null)
   const [lastBill, setLastBill] = useState<Bill | null>(null)
+  const [editBill, setEditBill] = useState<Bill | null>(null)
 
   useEffect(() => {
     if (initialFilter) setSearch(initialFilter)
@@ -660,13 +662,30 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
                 </div>
                 <p className="mt-3 text-center text-[10px] text-muted-foreground">Thank you — please visit again!</p>
               </div>
-              <Button className="w-full print:hidden" variant="outline" onClick={() => window.print()}>
-                <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
-              </Button>
+              <div className="flex gap-2 print:hidden">
+                <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
+                  <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
+                </Button>
+                <Button variant="outline" onClick={() => setEditBill(lastBill)}>
+                  <Edit3 className="mr-2 h-4 w-4 text-emerald-600" /> Edit Bill
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Edit Bill Modal */}
+      <EditBillDialog
+        open={!!editBill}
+        onOpenChange={(o) => !o && setEditBill(null)}
+        bill={editBill as any}
+        onSuccess={(updatedBill) => {
+          setLastBill(updatedBill as any)
+          load()
+          onDataChanged()
+        }}
+      />
     </div>
   )
 }
