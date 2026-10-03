@@ -13,8 +13,11 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { TableControls, SortableTh, useSort, usePagination } from './table-controls'
-import { api, apiList, formatINR, formatDate, formatDateTime, exportCSV } from '@/lib/hotel-utils'
-import { Banknote, Smartphone, CreditCard, Loader2, Wallet } from 'lucide-react'
+import { api, apiAs, apiList, formatINR, formatDate, formatDateTime, exportCSV } from '@/lib/hotel-utils'
+import { getCachedUser } from './user-context'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Separator } from '@/components/ui/separator'
+import { Banknote, Smartphone, CreditCard, Loader2, Wallet, Trash2, Receipt, Printer } from 'lucide-react'
 
 interface PaymentRow {
   id: string
@@ -65,11 +68,12 @@ interface TabProps {
   initialFilter?: string
 }
 
-export function PaymentsTab({ refreshKey }: TabProps) {
+export function PaymentsTab({ refreshKey, onDataChanged }: TabProps) {
   const [bills, setBills] = useState<Bill[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [ledger, setLedger] = useState<LedgerEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [lastBill, setLastBill] = useState<Bill | null>(null)
 
   const [search, setSearch] = useState('')
   const [channel, setChannel] = useState('ALL')
@@ -185,6 +189,38 @@ export function PaymentsTab({ refreshKey }: TabProps) {
         formatDateTime(r.date), r.source, r.ref, r.guest, r.detail, r.cash, r.upi, r.card, r.amount,
       ])
     )
+  }
+
+  async function handleDeletePayment(row: PaymentRow) {
+    const isAdv = row.source === 'ADVANCE'
+    const isBill = row.source === 'BILL'
+    const isOrder = row.source === 'ORDER'
+    const cleanId = row.id.replace(/^(bill|order|adv)-/, '')
+
+    const label = isBill ? `Bill ${row.ref}` : isOrder ? `Order ${row.ref}` : `Advance (${row.guest})`
+    if (!confirm(`Are you sure you want to delete ${label} (₹${row.amount})?`)) return
+
+    try {
+      const endpoint = isBill
+        ? `/api/bills?id=${cleanId}`
+        : isOrder
+          ? `/api/orders?id=${cleanId}`
+          : `/api/ledger?id=${cleanId}`
+
+      const res = await apiAs<{ success?: boolean; error?: string }>(
+        endpoint,
+        getCachedUser(),
+        { method: 'DELETE' }
+      )
+      if (res && res.error) {
+        alert(res.error)
+      } else {
+        await load()
+        onDataChanged?.()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Delete failed')
+    }
   }
 
   function resetFilters() {
@@ -309,12 +345,13 @@ export function PaymentsTab({ refreshKey }: TabProps) {
               <TableHead className="text-right">UPI</TableHead>
               <TableHead className="text-right">Card</TableHead>
               <TableHead className="text-right">Total</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {(paged as unknown as PaymentRow[]).length === 0 && (
               <TableRow>
-                <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={10} className="py-8 text-center text-sm text-muted-foreground">
                   No payments match the filters.
                 </TableCell>
               </TableRow>
@@ -332,6 +369,31 @@ export function PaymentsTab({ refreshKey }: TabProps) {
                 <TableCell className="text-right text-xs">{r.upi > 0 ? formatINR(r.upi) : '—'}</TableCell>
                 <TableCell className="text-right text-xs">{r.card > 0 ? formatINR(r.card) : '—'}</TableCell>
                 <TableCell className="text-right text-sm font-bold">{formatINR(r.amount)}</TableCell>
+                <TableCell className="text-right">
+                  <div className="flex items-center justify-end gap-1.5">
+                    {r.source === 'BILL' && (
+                      <button
+                        className="text-xs font-medium text-emerald-700 underline dark:text-emerald-400 hover:text-emerald-800"
+                        onClick={() => {
+                          const rawId = r.id.replace('bill-', '')
+                          const b = bills.find((item) => item.id === rawId)
+                          if (b) setLastBill(b)
+                        }}
+                      >
+                        View
+                      </button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      title="Delete payment record"
+                      onClick={() => handleDeletePayment(r)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -342,6 +404,58 @@ export function PaymentsTab({ refreshKey }: TabProps) {
         Date range covers {rows.length > 0 ? formatDate(rows[rows.length - 1].date) : '—'} →{' '}
         {rows.length > 0 ? formatDate(rows[0].date) : '—'}. Use filters above to narrow down.
       </p>
+
+      {/* Printable Invoice Modal */}
+      <Dialog open={!!lastBill} onOpenChange={(o) => !o && setLastBill(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Receipt className="h-5 w-5 text-emerald-600 dark:text-emerald-400" /> Bill {lastBill?.billNumber}
+            </DialogTitle>
+            <DialogDescription>{formatDateTime(lastBill?.createdAt)}</DialogDescription>
+          </DialogHeader>
+          {lastBill && (
+            <div className="space-y-3">
+              <div className="print-area rounded-lg border p-4 text-sm">
+                <div className="mb-3 text-center">
+                  <p className="text-lg font-bold">Ashirbad Lodge</p>
+                  <p className="mt-1 text-sm font-semibold uppercase tracking-wide">
+                    <span>GST TAX / CASH MEMO</span>
+                  </p>
+                </div>
+                <div className="mb-3 space-y-0.5 border-y py-2 text-xs text-muted-foreground">
+                  <p>Invoice: {lastBill.billNumber} · {formatDateTime(lastBill.createdAt)}</p>
+                  <p>Guest: {lastBill.booking?.guest?.name || 'Guest'}</p>
+                  <p>Room: {lastBill.booking?.room?.number || '-'}</p>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Cash</span>
+                    <span>{formatINR(lastBill.payCash)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>UPI</span>
+                    <span>{formatINR(lastBill.payUpi)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Card</span>
+                    <span>{formatINR(lastBill.payCard)}</span>
+                  </div>
+                  <Separator />
+                  <div className="flex justify-between font-bold">
+                    <span>Total Collected</span>
+                    <span>{formatINR(lastBill.payCash + lastBill.payUpi + lastBill.payCard)}</span>
+                  </div>
+                </div>
+                <p className="mt-3 text-center text-[10px] text-muted-foreground">Thank you — please visit again!</p>
+              </div>
+              <Button className="w-full print:hidden" variant="outline" onClick={() => window.print()}>
+                <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
