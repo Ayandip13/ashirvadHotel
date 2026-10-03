@@ -582,6 +582,31 @@ async function updateBooking(body: Record<string, unknown>, user: RequestUser) {
     return NextResponse.json(updated)
   }
 
+  if (action === 'update') {
+    const { name, phone, ratePerDay, advance, guestCount, notes } = body
+    if (name || phone) {
+      const guestData: Record<string, string> = {}
+      if (name) guestData.name = String(name).trim()
+      if (phone) guestData.phone = String(phone).replace(/\D/g, '')
+      await prisma.guest.update({
+        where: { id: booking.guestId },
+        data: guestData,
+      })
+    }
+    const updateData: Record<string, unknown> = {}
+    if (ratePerDay !== undefined) updateData.ratePerDay = num(ratePerDay)
+    if (advance !== undefined) updateData.advance = num(advance)
+    if (guestCount !== undefined) updateData.guestCount = parseInt(String(guestCount))
+    if (notes !== undefined) updateData.notes = String(notes)
+
+    const updated = await prisma.booking.update({
+      where: { id: String(id) },
+      data: updateData,
+    })
+    await logAudit('BOOKING_UPDATE', 'Booking', booking.id, `Updated booking for Room ${booking.room.number} (${booking.guest.name})`, user)
+    return NextResponse.json(updated)
+  }
+
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
 }
 
@@ -1131,8 +1156,16 @@ async function deleteBill(req: NextRequest, user: RequestUser) {
 
   if (!bill) return NextResponse.json({ error: 'Bill not found' }, { status: 404 })
 
-  await prisma.bill.delete({ where: { id } })
-  await logAudit('DELETE_BILL', 'Bill', id, `Deleted bill ${bill.billNumber} for Room ${bill.booking.room.number} (${bill.booking.guest.name})`, user)
+  await prisma.$transaction(async (tx) => {
+    await tx.ledgerEntry.deleteMany({ where: { refId: bill.id } })
+    await tx.bill.delete({ where: { id: bill.id } })
+  })
+
+  if (bill.bookingId) {
+    await refreshBookingPaymentStatus(bill.bookingId)
+  }
+
+  await logAudit('DELETE_BILL', 'Bill', id, `Deleted bill ${bill.billNumber} for Room ${bill.booking?.room?.number || ''} (${bill.booking?.guest?.name || ''})`, user)
   return NextResponse.json({ success: true, message: `Bill ${bill.billNumber} deleted successfully` })
 }
 

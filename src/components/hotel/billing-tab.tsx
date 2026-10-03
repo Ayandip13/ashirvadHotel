@@ -44,6 +44,7 @@ import {
   Wallet,
   ShieldCheck,
   AlertCircle,
+  Trash2,
 } from 'lucide-react'
 
 interface Guest {
@@ -308,6 +309,29 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
     }
   }
 
+  async function deleteBill(bill: Bill) {
+    if (!confirm(`Are you sure you want to delete Invoice ${bill.billNumber} (${formatINR(bill.grandTotal)})?`)) return
+    setBusy(true)
+    try {
+      const res = await apiAs<{ success?: boolean; error?: string }>(
+        `/api/bills?id=${bill.id}`,
+        getCachedUser(),
+        { method: 'DELETE' }
+      )
+      if (res && res.error) {
+        alert(res.error)
+      } else {
+        if (lastBill?.id === bill.id) setLastBill(null)
+        await load()
+        onDataChanged()
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not delete invoice')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const filteredBills = useMemo(() => {
     const q = search.trim().toLowerCase()
     return bills.filter((b) => {
@@ -441,6 +465,15 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                     >
                       <Wallet className="h-3 w-3" /> Collect
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 w-7 p-0 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                      title="Delete Invoice"
+                      onClick={() => deleteBill(b)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   </div>
                 </li>
               ))}
@@ -493,7 +526,7 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                 <TableHead>Billed</TableHead>
                 <TableHead>Total</TableHead>
                 <TableHead>Payment</TableHead>
-                <TableHead className="text-right">View</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -532,9 +565,20 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    <button className="text-xs text-emerald-700 underline dark:text-emerald-400" onClick={() => setLastBill(b)}>
-                      View Bill
-                    </button>
+                    <div className="flex items-center justify-end gap-2">
+                      <button className="text-xs font-medium text-emerald-700 underline dark:text-emerald-400 hover:text-emerald-800" onClick={() => setLastBill(b)}>
+                        View Bill
+                      </button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        title="Delete Invoice"
+                        onClick={() => deleteBill(b)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -929,9 +973,14 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                 </div>
                 <p className="mt-3 text-center text-[10px] text-muted-foreground">Thank you — please visit again!</p>
               </div>
-              <Button className="w-full print:hidden" variant="outline" onClick={() => window.print()}>
-                <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
-              </Button>
+              <div className="flex gap-2 print:hidden">
+                <Button className="flex-1" variant="outline" onClick={() => window.print()}>
+                  <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
+                </Button>
+                <Button variant="destructive" onClick={() => deleteBill(lastBill)}>
+                  <Trash2 className="mr-2 h-4 w-4" /> Delete
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
