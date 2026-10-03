@@ -654,7 +654,7 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
       {/* ============ Invoice preview (printable) ============ */}
       <Dialog open={!!lastBill} onOpenChange={(o) => !o && setLastBill(null)}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader className="print:hidden">
             <DialogTitle className="flex items-center gap-2">
               <Receipt className="h-5 w-5 text-emerald-600 dark:text-emerald-400" /> Bill {lastBill?.billNumber}
             </DialogTitle>

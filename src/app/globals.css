@@ -121,20 +121,79 @@
   }
 }
 
-/* Print: only the invoice (.print-area) goes to paper */
+/* Print: Clean & reliable invoice printing from Radix Dialogs */
 @media print {
-  body * {
-    visibility: hidden;
+  @page {
+    size: auto;
+    margin: 12mm;
   }
-  .print-area,
-  .print-area * {
-    visibility: visible;
+
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    height: auto !important;
+    overflow: visible !important;
   }
-  .print-area {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
+
+  /* Hide main app UI */
+  body > *:not([data-radix-portal]) {
+    display: none !important;
+  }
+
+  /* Hide dialog backdrop overlays */
+  [data-radix-portal] > [data-state="open"]:not([role="dialog"]) {
+    display: none !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+  }
+
+  /* Remove fixed dialog positioning and constraints for print page */
+  [role="dialog"] {
+    position: static !important;
+    transform: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    max-height: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
     border: none !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    overflow: visible !important;
+  }
+
+  /* Hide non-printable elements */
+  .print\:hidden,
+  button,
+  [data-radix-collection-item],
+  button[aria-label="Close"],
+  .sr-only {
+    display: none !important;
+  }
+
+  /* Format printable invoice block */
+  .print-area {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 750px !important;
+    margin: 0 auto !important;
+    padding: 16px !important;
+    border: 1px solid #d1d5db !important;
+    border-radius: 8px !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-shadow: none !important;
+  }
+
+  .print-area * {
+    visibility: visible !important;
+    color: #000000 !important;
+  }
+
+  .print-area .text-muted-foreground {
+    color: #4b5563 !important;
   }
 }

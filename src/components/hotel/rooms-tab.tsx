@@ -458,15 +458,6 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
                     </Select>
                   </div>
                 </div>
-
-                <Button
-                  variant="destructive"
-                  className="w-full mt-2"
-                  disabled={busy || viewRoom.status === 'OCCUPIED'}
-                  onClick={() => handleDeleteRoom(viewRoom.id, viewRoom.number)}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" /> Delete Room {viewRoom.number}
-                </Button>
               </>
             )}
           </div>
@@ -595,7 +586,7 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
       {/* Printable Invoice Modal */}
       <Dialog open={!!lastBill} onOpenChange={(o) => !o && setLastBill(null)}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader className="print:hidden">
             <DialogTitle className="flex items-center gap-2">
               <Receipt className="h-5 w-5 text-emerald-600 dark:text-emerald-400" /> Bill {lastBill?.billNumber}
             </DialogTitle>
