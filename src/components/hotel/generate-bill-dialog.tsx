@@ -276,17 +276,13 @@ export function GenerateBillDialog({
               </div>
             )}
 
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Food {calc.foodTotal > 0 && `(${formatINR(calc.foodTotal)})`}</Label>
                 <div className="flex items-center justify-between rounded-md border px-2.5 py-2">
                   <span className="text-xs">Add to bill</span>
                   <Switch checked={includeFood} onCheckedChange={setIncludeFood} className="scale-75" />
                 </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Extra (₹)</Label>
-                <Input type="number" value={extraCharges} onChange={(e) => setExtraCharges(e.target.value)} />
               </div>
               <div className="space-y-1.5">
                 <Label>Discount (₹)</Label>

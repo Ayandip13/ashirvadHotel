@@ -213,13 +213,6 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30"
-            onClick={() => setDeleteOpen(true)}
-          >
-            <Trash2 className="h-4 w-4" /> Delete Room
-          </Button>
           <Button variant="outline" className="gap-2" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" /> Add Room
           </Button>
@@ -442,16 +435,6 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
                 </div>
               </div>
             )}
-            {viewRoom && (
-              <Button
-                variant="destructive"
-                className="w-full mt-2"
-                disabled={busy || viewRoom.status === 'OCCUPIED'}
-                onClick={() => handleDeleteRoom(viewRoom.id, viewRoom.number)}
-              >
-                <Trash2 className="mr-2 h-4 w-4" /> Delete Room {viewRoom.number}
-              </Button>
-            )}
           </div>
         </DialogContent>
       </Dialog>
@@ -503,41 +486,6 @@ export function RoomsTab({ refreshKey, onDataChanged, initialFilter, onNavigate 
             </div>
             <Button className="w-full" disabled={busy || !newNumber.trim()} onClick={addRoom}>
               Add Room
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete room */}
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent className="max-w-xs">
-          <DialogHeader>
-            <DialogTitle>Delete Room</DialogTitle>
-            <DialogDescription>Select a room to delete. Occupied rooms or rooms with history cannot be deleted.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>Select Room</Label>
-              <Select value={deleteRoomId} onValueChange={setDeleteRoomId}>
-                <SelectTrigger aria-label="Select Room to Delete">
-                  <SelectValue placeholder="Choose a room…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {rooms.map((r) => (
-                    <SelectItem key={r.id} value={r.id}>
-                      Room {r.number} ({r.type} - {r.status})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button
-              variant="destructive"
-              className="w-full"
-              disabled={busy || !deleteRoomId}
-              onClick={() => handleDeleteRoom(deleteRoomId)}
-            >
-              <Trash2 className="mr-2 h-4 w-4" /> Delete Selected Room
             </Button>
           </div>
         </DialogContent>
