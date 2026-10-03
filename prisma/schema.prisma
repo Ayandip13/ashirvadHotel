@@ -98,6 +98,7 @@ model Bill {
   gstNumber       String?
   createdBy       String?  // user name who created the bill
   approvedBy      String?  // manager who approved custom billing
+  status          String   @default("FINAL") // DRAFT | FINAL
   notes           String?
   booking         Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   createdAt       DateTime @default(now())
@@ -105,6 +106,7 @@ model Bill {
 
   @@index([bookingId])
   @@index([billNumber])
+  @@index([status])
   @@index([createdAt])
   @@index([isCorporate])
 }

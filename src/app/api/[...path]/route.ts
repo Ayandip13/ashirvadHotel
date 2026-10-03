@@ -751,7 +751,19 @@ async function createBill(body: Record<string, unknown>, user: RequestUser) {
         gstNumber: gstNumber ? String(gstNumber) : booking.guest.gst || null,
         createdBy: user.name || null,
         approvedBy: isCustom ? user.name || null : null,
+        status: body.status === 'DRAFT' ? 'DRAFT' : 'FINAL',
         notes: notes ? String(notes) : null,
+      },
+    })
+
+    await tx.auditLog.create({
+      data: {
+        action: body.status === 'DRAFT' ? 'BILL_DRAFT_CREATED' : 'BILL_FINALIZED',
+        entity: 'Bill',
+        entityId: createdBill.id,
+        details: `Bill ${billNumber} (${body.status === 'DRAFT' ? 'Draft' : 'Final'}) created by ${user.name || 'Staff'}. Real Amount: ₹${actualRoomTotal}, Billed Amount: ₹${billedRoom}, GST: ${gstPct}% (₹${billedGst}), Grand Total: ₹${grandTotal}, Room: ${booking.room.number}`,
+        userName: user.name || 'Staff',
+        userRole: user.role || 'RECEPTION',
       },
     })
 
@@ -934,9 +946,41 @@ async function updateBill(body: Record<string, unknown>, user: RequestUser) {
   // Preserved original/internal room amount
   const actualRoomTotal = bill.actualRoomTotal
 
+  // Bill finalization status locking rule
+  const isFinalized = bill.status === 'FINAL'
+  const targetStatus = body.status === 'FINAL' || body.status === 'DRAFT' ? String(body.status) : bill.status
+  const isFinancialChange =
+    (billedRoomTotal !== undefined && num(billedRoomTotal) !== bill.billedRoomTotal) ||
+    (gstPercent !== undefined && num(gstPercent) !== bill.gstPercent) ||
+    (extraCharges !== undefined && num(extraCharges) !== bill.extraCharges) ||
+    (discount !== undefined && num(discount) !== bill.discount) ||
+    (payCash !== undefined && num(payCash) !== bill.payCash) ||
+    (payUpi !== undefined && num(payUpi) !== bill.payUpi) ||
+    (payCard !== undefined && num(payCard) !== bill.payCard) ||
+    (roomId !== undefined && String(roomId) !== bill.booking.roomId)
+
+  if (isFinalized && isFinancialChange) {
+    if (!managerPin) {
+      return NextResponse.json(
+        { error: 'This bill is finalized and locked. Financial edits require Manager/Admin authorization PIN.' },
+        { status: 403 }
+      )
+    }
+    const approver = await prisma.user.findFirst({
+      where: { pin: String(managerPin), active: true, role: { in: ['ADMIN', 'MANAGER'] } },
+    })
+    if (!approver) {
+      return NextResponse.json(
+        { error: 'Modification blocked: Invalid Manager/Admin authorization PIN' },
+        { status: 403 }
+      )
+    }
+    user = { id: approver.id, name: approver.name, role: approver.role }
+  }
+
   // Permission check if changing to or from custom billing amount
   const isCustom = Math.abs(newBilledRoom - actualRoomTotal) > 0.01
-  if (isCustom && managerPin) {
+  if (isCustom && managerPin && !isFinalized) {
     const approver = await prisma.user.findFirst({
       where: {
         pin: String(managerPin),
@@ -970,7 +1014,7 @@ async function updateBill(body: Record<string, unknown>, user: RequestUser) {
 
   const updatedBill = await prisma.$transaction(async (tx) => {
     // Optional room change for booking if requested
-    if (roomId && String(roomId) !== bill.booking.roomId) {
+    if (roomId && String(roomId) !== bill.booking.roomId && (!isFinalized || managerPin)) {
       const targetRoom = await tx.room.findUnique({ where: { id: String(roomId) } })
       if (targetRoom) {
         await tx.booking.update({
@@ -996,9 +1040,34 @@ async function updateBill(body: Record<string, unknown>, user: RequestUser) {
         isCorporate: isCustom || bill.isCorporate,
         corporateName: corporateName !== undefined ? (corporateName ? String(corporateName) : null) : bill.corporateName,
         gstNumber: gstNumber !== undefined ? (gstNumber ? String(gstNumber) : null) : bill.gstNumber,
+        status: targetStatus,
         notes: notes !== undefined ? (notes ? String(notes) : null) : bill.notes,
       },
     })
+
+    if (isFinalized && isFinancialChange) {
+      await tx.auditLog.create({
+        data: {
+          action: 'ADMIN_BILL_CORRECTION',
+          entity: 'Bill',
+          entityId: bill.id,
+          details: `Finalized bill ${bill.billNumber} modified by ${user.name || 'Admin'}. Old Total: ₹${bill.grandTotal}, New Total: ₹${newGrandTotal}, Billed Room: ₹${newBilledRoom}, GST: ${newGstPercent}% (₹${newBilledGst}), Room: ${bill.booking.room.number}`,
+          userName: user.name || 'Admin',
+          userRole: user.role || 'MANAGER',
+        },
+      })
+    } else if (!isFinalized && targetStatus === 'FINAL') {
+      await tx.auditLog.create({
+        data: {
+          action: 'BILL_FINALIZED',
+          entity: 'Bill',
+          entityId: bill.id,
+          details: `Bill ${bill.billNumber} finalized by ${user.name || 'Staff'}. Total: ₹${newGrandTotal}, Billed Room: ₹${newBilledRoom}, GST: ${newGstPercent}% (₹${newBilledGst}), Room: ${bill.booking.room.number}`,
+          userName: user.name || 'Staff',
+          userRole: user.role || 'RECEPTION',
+        },
+      })
+    }
 
     // Sync corresponding ledger entries
     await tx.ledgerEntry.deleteMany({

@@ -547,8 +547,11 @@ export function BillingTab({ refreshKey, onDataChanged, initialFilter }: TabProp
                 <TableRow key={b.id}>
                   <TableCell className="font-medium">
                     {b.billNumber}
+                    <Badge variant="outline" className="ml-1.5 h-4 border-emerald-400 px-1 text-[9px] text-emerald-700 dark:text-emerald-300">
+                      FINAL
+                    </Badge>
                     {b.billedRoomTotal !== b.actualRoomTotal && (
-                      <Badge variant="outline" className="ml-1.5 h-4 border-violet-400 px-1 text-[9px] text-violet-700 dark:text-violet-300">
+                      <Badge variant="outline" className="ml-1 h-4 border-violet-400 px-1 text-[9px] text-violet-700 dark:text-violet-300">
                         CUSTOM
                       </Badge>
                     )}

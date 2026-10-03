@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { apiAs, formatINR, formatDateTime } from '@/lib/hotel-utils'
 import { getCachedUser } from './user-context'
-import { Loader2, Info, Edit3 } from 'lucide-react'
+import { Loader2, Info, Edit3, ShieldCheck } from 'lucide-react'
 
 export interface Bill {
   id: string
@@ -83,8 +83,11 @@ export function EditBillDialog({
   const [corporateName, setCorporateName] = useState('')
   const [gstNumber, setGstNumber] = useState('')
   const [notes, setNotes] = useState('')
+  const [managerPin, setManagerPin] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+
+  const isFinalized = bill?.status === 'FINAL' || !bill?.status
 
   useEffect(() => {
     if (open && bill) {
@@ -98,6 +101,7 @@ export function EditBillDialog({
       setCorporateName(bill.corporateName || bill.booking?.guest?.company || '')
       setGstNumber(bill.gstNumber || bill.booking?.guest?.gst || '')
       setNotes(bill.notes || '')
+      setManagerPin('')
       setError('')
     }
   }, [open, bill])
@@ -154,6 +158,11 @@ export function EditBillDialog({
   async function handleSave() {
     if (!bill || !calc) return
 
+    if (isFinalized && (!managerPin || managerPin.trim().length < 3)) {
+      setError('This bill is finalized & locked. Manager/Admin authorization PIN is required for administrative corrections.')
+      return
+    }
+
     const parsedGst = parseFloat(gstPercent)
     if (isNaN(parsedGst) || !isFinite(parsedGst) || parsedGst < 0 || parsedGst > 100) {
       setError('GST percentage must be a valid number between 0 and 100')
@@ -190,6 +199,7 @@ export function EditBillDialog({
           corporateName: corporateName || null,
           gstNumber: gstNumber || null,
           notes: notes || null,
+          managerPin: managerPin ? managerPin.trim() : undefined,
         }),
       })
       onSuccess(updated)
@@ -215,6 +225,28 @@ export function EditBillDialog({
 
         {bill && calc && (
           <div className="space-y-4">
+            {isFinalized && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                <div className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
+                  <ShieldCheck className="h-4 w-4 text-amber-600" />
+                  <span>Finalized Financial Document — Locked</span>
+                </div>
+                <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
+                  This bill is finalized. To perform administrative corrections to customer amount, GST, or room, enter Manager or Admin PIN.
+                </p>
+                <div className="mt-2.5 space-y-1">
+                  <Label className="text-[11px] font-semibold">Manager / Admin PIN *</Label>
+                  <Input
+                    type="password"
+                    placeholder="Enter PIN to authorize correction"
+                    value={managerPin}
+                    onChange={(e) => setManagerPin(e.target.value)}
+                    className="h-8 text-xs border-amber-300 dark:border-amber-800"
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-muted-foreground">Original Room Amount (Internal)</Label>
