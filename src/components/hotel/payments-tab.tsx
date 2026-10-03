@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/table'
 import { TableControls, SortableTh, useSort, usePagination } from './table-controls'
 import { api, apiAs, apiList, formatINR, formatDate, formatDateTime, exportCSV } from '@/lib/hotel-utils'
+import { triggerPrintInvoice } from '@/lib/print-invoice'
 import { getCachedUser } from './user-context'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
@@ -66,9 +67,10 @@ interface TabProps {
   refreshKey: number
   onDataChanged: () => void
   initialFilter?: string
+  settings?: Record<string, string>
 }
 
-export function PaymentsTab({ refreshKey, onDataChanged }: TabProps) {
+export function PaymentsTab({ refreshKey, onDataChanged, settings = {} }: TabProps) {
   const [bills, setBills] = useState<Bill[]>([])
   const [orders, setOrders] = useState<Order[]>([])
   const [ledger, setLedger] = useState<LedgerEntry[]>([])
@@ -449,7 +451,7 @@ export function PaymentsTab({ refreshKey, onDataChanged }: TabProps) {
                 </div>
                 <p className="mt-3 text-center text-[10px] text-muted-foreground">Thank you — please visit again!</p>
               </div>
-              <Button className="w-full print:hidden" variant="outline" onClick={() => window.print()}>
+              <Button className="w-full print:hidden" variant="outline" onClick={() => triggerPrintInvoice(lastBill, settings)}>
                 <Printer className="mr-2 h-4 w-4" /> Print / Save PDF
               </Button>
             </div>

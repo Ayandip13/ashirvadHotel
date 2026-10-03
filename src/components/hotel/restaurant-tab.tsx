@@ -18,6 +18,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { api, apiAs, formatINR, formatDateTime, formatDate, exportCSV } from '@/lib/hotel-utils'
+import { triggerPrintFoodBill } from '@/lib/print-invoice'
 import { getCachedUser } from './user-context'
 import { Loader2, Plus, UtensilsCrossed, Minus, ShoppingBag, Check, Trash2, Store, Download, Printer, Receipt } from 'lucide-react'
 
@@ -637,7 +638,7 @@ export function RestaurantTab({ refreshKey, onDataChanged }: { refreshKey: numbe
                 </p>
               </div>
 
-              <Button className="w-full print:hidden bg-emerald-600 hover:bg-emerald-700" onClick={() => window.print()}>
+              <Button className="w-full print:hidden bg-emerald-600 hover:bg-emerald-700" onClick={() => triggerPrintFoodBill(printOrder, settings)}>
                 <Printer className="mr-2 h-4 w-4" /> Print Food Bill
               </Button>
             </div>
