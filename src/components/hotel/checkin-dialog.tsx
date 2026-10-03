@@ -103,8 +103,16 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
       setError('Guest name is required')
       return
     }
+    if (isCorporate && !company.trim()) {
+      setError('Company Name is required for Corporate Guest')
+      return
+    }
     if (!checkOut || isNaN(new Date(checkOut + 'T11:00:00').getTime())) {
-      setError('Please choose a valid expected check-out date')
+      setError('Expected Check-Out date is required')
+      return
+    }
+    if (!guestCount || parseInt(guestCount) < 1) {
+      setError('Number of guests must be at least 1')
       return
     }
     setSaving(true)
@@ -202,10 +210,12 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
           {isCorporate && (
             <>
               <div className="space-y-1.5">
-                <Label htmlFor="company">Company</Label>
+                <Label htmlFor="company" className="text-sm font-medium">
+                  Company Name <span className="text-red-500">*</span>
+                </Label>
                 <Input
                   id="company"
-                  placeholder="Company name"
+                  placeholder="Company name (mandatory)"
                   value={company}
                   onChange={(e) => setCompany(e.target.value)}
                 />
@@ -224,7 +234,7 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label htmlFor="checkout">Expected Check-Out</Label>
+              <Label htmlFor="checkout">Expected Check-Out *</Label>
               <Input
                 id="checkout"
                 type="date"
@@ -234,7 +244,7 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="gcount">Guests</Label>
+              <Label htmlFor="gcount">Guests *</Label>
               <Input
                 id="gcount"
                 type="number"
@@ -246,7 +256,7 @@ export function CheckinDialog({ open, onOpenChange, room, onSuccess }: CheckinDi
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="advance">Advance Payment (₹)</Label>
+            <Label htmlFor="advance">Advance Payment (₹) *</Label>
             <Input
               id="advance"
               type="number"

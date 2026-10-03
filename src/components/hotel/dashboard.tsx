@@ -380,62 +380,7 @@ export function Dashboard({ refreshKey, onDataChanged, onNavigate }: DashboardPr
         </Card>
       </div>
 
-      {/* Legend */}
-      <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-        <span className="font-medium">Room Status:</span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-3 w-3 rounded bg-emerald-500" /> Vacant
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-3 w-3 rounded bg-red-500" /> Occupied
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-3 w-3 rounded bg-amber-400" /> Dirty
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span className="inline-block h-3 w-3 rounded bg-zinc-400" /> Maintenance
-        </span>
-      </div>
 
-      {/* Room grid by floor */}
-      {Object.entries(grouped).map(([floor, floorRooms]) => (
-        <div key={floor}>
-          <h3 className="mb-2 text-sm font-semibold text-muted-foreground">
-            {floor === '1' ? 'Floor 1' : floor === '2' ? 'Floor 2' : floor === '3' ? 'Floor 3' : `Floor ${floor}`}
-          </h3>
-          <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-10">
-            {floorRooms.map((room) => {
-              const style = STATUS_STYLES[room.status] || STATUS_STYLES.VACANT
-              const activeBooking = room.bookings?.[0]
-              const dirty = room.status === 'VACANT' && room.housekeeping === 'DIRTY'
-              return (
-                <button
-                  key={room.id}
-                  onClick={() =>
-                    room.status === 'VACANT' && !dirty ? setCheckinRoom(room) : setViewRoom(room)
-                  }
-                  className={`min-h-[92px] rounded-xl border-2 p-2.5 text-left transition-all active:scale-95 ${style.card}`}
-                >
-                  <div className="flex items-start justify-between">
-                    <span className="text-base font-bold leading-tight">{room.number}</span>
-                    <span className={`mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full ${dirty ? 'bg-amber-400' : style.dot}`} />
-                  </div>
-                  <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{room.type}</p>
-                  {room.status === 'OCCUPIED' && activeBooking ? (
-                    <p className="mt-1 truncate text-[10px] font-semibold text-red-700 dark:text-red-400">
-                      {activeBooking?.guest?.name || 'Guest'}
-                    </p>
-                  ) : dirty ? (
-                    <p className="mt-1 truncate text-[10px] font-semibold text-amber-700 dark:text-amber-400">Cleaning</p>
-                  ) : (
-                    <p className="mt-1 truncate text-[10px] font-medium">{formatINR(room.rate)}</p>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      ))}
 
       {/* Check-in dialog */}
       <CheckinDialog

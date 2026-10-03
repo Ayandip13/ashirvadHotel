@@ -11,6 +11,7 @@ datasource db {
 model Room {
   id           String      @id @default(cuid())
   number       String      @unique
+  floor        String?     @default("1")
   type         String      @default("Non-AC") // AC | Non-AC | Deluxe | Deluxe AC | Suite
   capacity     Int         @default(2)
   rate         Float       @default(1000) // actual per-night rate

@@ -134,6 +134,18 @@ export function BookingDialog({ open, onOpenChange, onSuccess, roomId, initialPh
       setError('Guest name is required')
       return
     }
+    if (isCorporate && !company.trim()) {
+      setError('Company Name is required for Corporate Guest')
+      return
+    }
+    if (!checkOut || isNaN(new Date(checkOut + 'T11:00:00').getTime())) {
+      setError('Expected Check-Out date is required')
+      return
+    }
+    if (!guestCount || parseInt(guestCount) < 1) {
+      setError('Number of guests must be at least 1')
+      return
+    }
     setSaving(true)
     setError('')
     try {
