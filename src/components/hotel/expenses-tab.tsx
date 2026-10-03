@@ -491,23 +491,23 @@ export function ExpensesTab({ refreshKey, onDataChanged }: TabProps) {
 
       {/* Categories manager */}
       <Dialog open={catOpen} onOpenChange={setCatOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm max-h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Expense Categories</DialogTitle>
             <DialogDescription>Configurable categories for organizing expenses</DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="flex flex-col min-h-0 space-y-3 pt-1">
             <div className="flex gap-2">
               <Input value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="New category name" />
               <Button onClick={addCategory} disabled={!newCat.trim()}>
                 Add
               </Button>
             </div>
-            <ul className="max-h-64 space-y-1 overflow-y-auto">
+            <ul className="max-h-[50vh] sm:max-h-64 overflow-y-auto space-y-1.5 pr-1 touch-pan-y">
               {categories.map((c) => (
                 <li key={c.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
-                  <span>{c.name}</span>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" onClick={() => deleteCategory(c.id)} aria-label={`Delete ${c.name}`}>
+                  <span className="truncate pr-2">{c.name}</span>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/30" onClick={() => deleteCategory(c.id)} aria-label={`Delete ${c.name}`}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </li>
