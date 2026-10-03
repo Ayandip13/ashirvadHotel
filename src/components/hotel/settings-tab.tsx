@@ -38,6 +38,7 @@ import {
   Plus,
   UtensilsCrossed,
   Trash2,
+  Key,
 } from 'lucide-react'
 
 interface AppUserRow {
@@ -299,21 +300,19 @@ export function SettingsTab({ refreshKey }: TabProps) {
                   <UsersRound className="h-4 w-4 text-emerald-600" />
                   <p className="text-sm font-semibold">App Users &amp; Permissions</p>
                 </div>
-                {isAdmin && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1"
-                    onClick={() => {
-                      setUName('')
-                      setURole('RECEPTION')
-                      setUPin('')
-                      setUserDlg({ mode: 'add' })
-                    }}
-                  >
-                    <Plus className="h-3.5 w-3.5" /> Add User
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1"
+                  onClick={() => {
+                    setUName('')
+                    setURole('RECEPTION')
+                    setUPin('')
+                    setUserDlg({ mode: 'add' })
+                  }}
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add User
+                </Button>
               </div>
               <ul className="space-y-1.5">
                 {users.map((u) => (
@@ -325,21 +324,19 @@ export function SettingsTab({ refreshKey }: TabProps) {
                       </Badge>
                     </div>
                     <div className="flex items-center gap-1">
-                      {isAdmin && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-7 text-xs"
-                          onClick={() => {
-                            setUName(u.name)
-                            setURole(u.role)
-                            setUPin('')
-                            setUserDlg({ mode: 'edit', row: u })
-                          }}
-                        >
-                          Edit
-                        </Button>
-                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1 border-violet-200 text-violet-700 hover:bg-violet-50 dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-950/40"
+                        onClick={() => {
+                          setUName(u.name)
+                          setURole(u.role)
+                          setUPin('')
+                          setUserDlg({ mode: 'edit', row: u })
+                        }}
+                      >
+                        <Key className="h-3 w-3" /> Change PIN
+                      </Button>
                     </div>
                   </li>
                 ))}
